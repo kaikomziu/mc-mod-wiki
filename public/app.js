@@ -327,7 +327,11 @@ async function renderUser(name) {
     if (!file) return;
     const btn = e.target;
     btn.disabled = true; btn.textContent = 'アップロード中…';
-    try { await saveAvatar(await uploadAvatar(file)); } catch (err) { alert(err.message); btn.disabled = false; btn.textContent = '📷 アイコンを変更'; }
+    try {
+      const url = await uploadAvatar(file);
+      if (url) await saveAvatar(url);
+      else { btn.disabled = false; btn.textContent = '📷 アイコンを変更'; }
+    } catch (err) { alert(err.message); btn.disabled = false; btn.textContent = '📷 アイコンを変更'; }
   });
   app.querySelector('[data-avatar-remove]')?.addEventListener('click', async () => {
     if (!confirm('アイコンを外しますか？')) return;
@@ -410,23 +414,114 @@ function avatarHtml(acc, cls) {
     : `<span class="${cls} avatar-letter" aria-hidden="true">${esc([...(acc?.name || '?')][0])}</span>`;
 }
 
-// アイコン用に中央を正方形に切り抜いて 256px に縮小してアップロード
-async function uploadAvatar(file) {
-  if (!/^image\//.test(file.type)) throw new Error('画像ファイルを選んでください。');
-  const bmp = await createImageBitmap(file);
-  const side = Math.min(bmp.width, bmp.height);
-  const canvas = Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
-  const ctx = canvas.getContext('2d');
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 256, 256);
-  let blob = await new Promise(r => canvas.toBlob(r, 'image/webp', 0.9));
-  if (!blob || blob.type !== 'image/webp') blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
-  const r = await fetch(`${config.api}/images?user=${encodeURIComponent(state.account?.name || '')}`, {
+// 画像の切り抜き画面。正方形の枠の中で画像をドラッグ・拡大縮小して範囲を決める。
+// 戻り値: { blob }（切り抜いた画像）/ { original: true }（切り抜かずに使う）/ null（キャンセル）
+function openCropper(file, { size = 256, title = 'アイコンにする範囲を選ぶ', allowOriginal = false } = {}) {
+  return new Promise(async resolve => {
+    if (!/^image\//.test(file.type)) { alert('画像ファイルを選んでください。'); resolve(null); return; }
+    let img;
+    try { img = await createImageBitmap(file); } catch { alert('画像を読み込めませんでした。'); resolve(null); return; }
+    const VIEW = 300; // 枠の大きさ（画面上）
+    const bg = document.createElement('div');
+    bg.className = 'modal-bg';
+    bg.innerHTML = `
+      <div class="modal cropper" role="dialog" aria-label="${esc(title)}">
+        <h2>${esc(title)}</h2>
+        <p class="muted small">ドラッグで位置、スライダー・ホイール・2本指で大きさを変えられます。</p>
+        <div class="crop-stage"><canvas width="${VIEW * 2}" height="${VIEW * 2}"></canvas></div>
+        <label class="crop-zoom">🔍<input type="range" min="1" max="5" step="0.01" value="1" aria-label="拡大"></label>
+        <div class="btns">
+          <button type="button" class="btn" data-cancel>キャンセル</button>
+          ${allowOriginal ? '<button type="button" class="btn" data-original>切り抜かずに使う</button>' : ''}
+          <button type="button" class="btn primary" data-ok>この範囲で決定</button>
+        </div>
+      </div>`;
+    document.body.append(bg);
+    const canvas = bg.querySelector('canvas');
+    const ctx = canvas.getContext('2d');
+    const zoom = bg.querySelector('input[type=range]');
+    const base = Math.max(VIEW / img.width, VIEW / img.height); // 枠いっぱいに収まる最小の倍率
+    let scale = base;
+    let x = (VIEW - img.width * scale) / 2; // 画像の左上（枠の座標）
+    let y = (VIEW - img.height * scale) / 2;
+    const clamp = () => {
+      x = Math.min(0, Math.max(VIEW - img.width * scale, x));
+      y = Math.min(0, Math.max(VIEW - img.height * scale, y));
+    };
+    const draw = () => {
+      ctx.setTransform(2, 0, 0, 2, 0, 0); // 高解像度表示
+      ctx.clearRect(0, 0, VIEW, VIEW);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+    };
+    // 指定した点を中心に拡大縮小
+    const zoomTo = (next, cx = VIEW / 2, cy = VIEW / 2) => {
+      next = Math.min(base * 5, Math.max(base, next));
+      x = cx - (cx - x) * (next / scale);
+      y = cy - (cy - y) * (next / scale);
+      scale = next;
+      zoom.value = scale / base;
+      clamp(); draw();
+    };
+    draw();
+
+    // ドラッグ・ピンチ
+    const pointers = new Map();
+    let pinch = null;
+    const pos = e => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) * VIEW / r.width, y: (e.clientY - r.top) * VIEW / r.height }; };
+    canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, pos(e)); });
+    canvas.addEventListener('pointermove', e => {
+      if (!pointers.has(e.pointerId)) return;
+      const prev = pointers.get(e.pointerId);
+      const cur = pos(e);
+      pointers.set(e.pointerId, cur);
+      if (pointers.size === 2) {
+        const [a, b] = [...pointers.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (pinch) zoomTo(scale * d / pinch, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        pinch = d;
+      } else {
+        x += cur.x - prev.x; y += cur.y - prev.y;
+        clamp(); draw();
+      }
+    });
+    const up = e => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; };
+    canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('pointercancel', up);
+    canvas.addEventListener('wheel', e => { e.preventDefault(); const p = pos(e); zoomTo(scale * (e.deltaY < 0 ? 1.1 : 1 / 1.1), p.x, p.y); }, { passive: false });
+    zoom.addEventListener('input', () => zoomTo(base * Number(zoom.value)));
+
+    const done = v => { bg.remove(); resolve(v); };
+    bg.querySelector('[data-cancel]').addEventListener('click', () => done(null));
+    bg.addEventListener('keydown', e => { if (e.key === 'Escape') done(null); });
+    bg.querySelector('[data-original]')?.addEventListener('click', () => done({ original: true }));
+    bg.querySelector('[data-ok]').addEventListener('click', async () => {
+      const out = Object.assign(document.createElement('canvas'), { width: size, height: size });
+      const o = out.getContext('2d');
+      o.imageSmoothingQuality = 'high';
+      const k = size / VIEW;
+      o.drawImage(img, x * k, y * k, img.width * scale * k, img.height * scale * k);
+      let blob = await new Promise(r => out.toBlob(r, 'image/webp', 0.9));
+      if (!blob || blob.type !== 'image/webp') blob = await new Promise(r => out.toBlob(r, 'image/png'));
+      done({ blob });
+    });
+    bg.querySelector('[data-ok]').focus();
+  });
+}
+
+async function uploadBlob(blob, user) {
+  const r = await fetch(`${config.api}/images?user=${encodeURIComponent(user || '')}`, {
     method: 'POST', body: blob, headers: { 'content-type': blob.type, ...authHeaders() },
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || 'アップロードに失敗しました。');
   return data.url;
+}
+
+// アイコン：範囲を選んで 256px でアップロード（キャンセルなら null）
+async function uploadAvatar(file) {
+  const res = await openCropper(file, { size: 256, title: 'アイコンにする範囲を選ぶ' });
+  return res?.blob ? uploadBlob(res.blob, state.account?.name) : null;
 }
 
 async function uploadImage(file) {
@@ -989,7 +1084,12 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
   app.querySelector('[data-upload-image]').addEventListener('click', async () => {
     const file = await pickFile();
     if (!file) return;
-    try { form.image.value = await uploadImage(file); dirty(); toast('📷 画像をアップロードしました'); } catch (e) { alert(e.message); }
+    try {
+      const res = await openCropper(file, { size: 512, title: isMod ? 'アイコンにする範囲を選ぶ' : '使う範囲を選ぶ', allowOriginal: true });
+      if (!res) return;
+      form.image.value = res.original ? await uploadImage(file) : await uploadBlob(res.blob, getUser());
+      dirty(); toast('📷 画像をアップロードしました');
+    } catch (e) { alert(e.message); }
   });
 
   // 配布ページから情報を取得 → 確認してから反映
