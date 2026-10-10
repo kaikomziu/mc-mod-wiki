@@ -736,6 +736,49 @@ async function renderNews() {
   if (target) target.scrollIntoView();
 }
 
+/* ===== コメント ===== */
+// 本文は文字のまま表示（URLだけリンクにする）
+const commentHtml = t => esc(t).replace(/https?:\/\/[^\s<>"]+/g, url => `<a href="${url}" target="_blank" rel="noopener nofollow ugc">${url}</a>`).replace(/\n/g, '<br>');
+function bindComments(col, slug) {
+  const box = app.querySelector('#comments');
+  const listEl = box.querySelector('.comment-list');
+  const base = `/${col}/${encodeURIComponent(slug)}/comments`;
+  const draw = items => {
+    box.querySelector('.comment-count').textContent = items.length ? `${items.length}件` : '';
+    listEl.innerHTML = items.length ? items.map(c => `
+      <li class="comment" id="c-${c.id}">
+        <div class="comment-head">${userLabel(c)} <span class="muted small">${fmt(c.at)}</span>
+          ${c.mine || state.admin ? `<button type="button" class="linkish small danger-text" data-del-comment="${c.id}">削除</button>` : ''}</div>
+        <div class="comment-body">${commentHtml(c.text)}</div>
+      </li>`).join('') : '<li class="muted small">まだコメントはありません。最初のコメントを書いてみよう！</li>';
+    listEl.querySelectorAll('[data-del-comment]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('このコメントを削除しますか？')) return;
+      try { draw(await api(`${base}/delete`, { method: 'POST', body: JSON.stringify({ id: b.dataset.delComment }) })); toast('コメントを削除しました'); } catch (err) { alert(err.message); }
+    }));
+  };
+  api(base).then(items => { if (app.contains(box)) draw(items); }).catch(() => { listEl.innerHTML = '<li class="muted small">コメントを読み込めませんでした。</li>'; });
+  const form = box.querySelector('.comment-form');
+  if (!form) return;
+  box.querySelector('[data-comment-login]')?.addEventListener('click', () => openAuth('login'));
+  const len = box.querySelector('.comment-len');
+  form.text.addEventListener('input', () => { len.textContent = `${form.text.value.length} / 1000`; });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = form.querySelector('button.primary');
+    btn.disabled = true;
+    try {
+      const user = form.user?.value.trim() || '';
+      if (user) setUser(user);
+      const items = await api(base, { method: 'POST', body: JSON.stringify({ text: form.text.value, user, website: form.website.value }) });
+      form.text.value = '';
+      len.textContent = '0 / 1000';
+      draw(items);
+      toast('💬 コメントしました');
+    } catch (err) { alert(err.message); }
+    btn.disabled = false;
+  });
+}
+
 /* ===== 検索 ===== */
 async function renderSearch() {
   const q = new URLSearchParams(location.search).get('q') || '';
@@ -877,8 +920,20 @@ async function renderView(col, slug) {
     <div class="page-foot">
       <span>作成: ${userLabel({ uid: m.createdUid, user: m.createdBy })} ・ 最終更新: ${fmt(m.updatedAt)}（${userLabel({ uid: m.log?.[0]?.uid, user: m.updatedBy })}）・ 版 ${m.rev}</span>
       <button type="button" class="linkish report-link" data-report>🚩 このページを通報</button>
-    </div>`;
+    </div>
+    <section class="comments" id="comments">
+      <h2 class="section-title">💬 コメント <small class="comment-count"></small></h2>
+      <ul class="comment-list"><li class="muted small">読み込み中…</li></ul>
+      ${state.editLocked && !state.admin ? '<p class="muted small">現在、コメントの受付を停止しています。</p>' : `
+      <form class="comment-form">
+        ${state.account ? '' : `<div class="comment-guest"><input name="user" maxlength="24" placeholder="名前" value="${esc(getUser() || '')}" required><span class="muted small">・<button type="button" class="linkish" data-comment-login>ログイン</button>すると名前の横にアイコンと肩書きが出ます</span></div>`}
+        <textarea name="text" rows="3" maxlength="1000" required placeholder="感想・質問・補足などをどうぞ（1000文字まで）"></textarea>
+        <input name="website" tabindex="-1" autocomplete="off" class="hp" aria-hidden="true">
+        <div class="btns"><span class="muted small comment-len">0 / 1000</span><button class="btn primary">コメントする</button></div>
+      </form>`}
+    </section>`;
   bindPageView();
+  bindComments(col, m.slug);
   app.querySelector('[data-report]').addEventListener('click', () => openReport(col, m.slug, m.name));
   app.querySelector('[data-like]').addEventListener('click', async e => {
     if (!state.account) { openAuth('login'); toast('いいねするにはログインしてください'); return; }

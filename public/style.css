@@ -515,3 +515,18 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .video.vertical .video-frame { aspect-ratio: 9 / 16; }
 .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 .video figcaption { margin-top: 6px; font-size: 13px; color: var(--muted); text-align: center; }
+
+/* コメント */
+.comments { margin-top: 28px; }
+.comment-list { list-style: none; padding: 0; margin: 0 0 14px; display: grid; gap: 10px; }
+.comment { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+.comment-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+.comment-head [data-del-comment] { margin-left: auto; }
+.comment-body { overflow-wrap: anywhere; line-height: 1.7; }
+.comment-form { display: grid; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.comment-form textarea, .comment-guest input { font: inherit; font-size: 15px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.comment-form textarea { width: 100%; resize: vertical; }
+.comment-guest { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.comment-guest input { max-width: 200px; }
+.comment-form .btns { justify-content: flex-end; align-items: center; }
+.comment-form .comment-len { margin-right: auto; }
