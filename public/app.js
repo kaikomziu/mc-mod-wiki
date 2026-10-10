@@ -229,23 +229,65 @@ async function renderUser(name) {
   let p;
   try { p = await api(`/users/${encodeURIComponent(name)}`); } catch (e) { app.innerHTML = errorBox(e); return; }
   const me = state.account?.uid === p.uid;
-  setMeta(pageTitle(`${p.name} さんのページ`));
+  setMeta(pageTitle(`${p.name} さんのプロフィール`));
+  // 作ったページはカードで表示（一覧の情報があればそれを使う）
+  const cardsFor = col => {
+    const items = p.created.filter(c => c.col === col);
+    if (!items.length) return `<p class="muted">まだありません。</p>`;
+    return `<div class="grid">${items.map(c => {
+      const full = listOf(col).find(x => x.slug === c.slug);
+      return full ? card(full, col) : `<a class="card" href="${KINDS[col].view(c.slug)}"><h3>${esc(c.name)}</h3></a>`;
+    }).join('')}</div>`;
+  };
+  const nMods = p.created.filter(c => c.col === 'pages').length;
+  const nArticles = p.created.length - nMods;
   app.innerHTML = `
-    <div class="page-head">
-      <div><h1 class="page-title">👤 ${esc(p.name)}</h1>
-      <p class="lead">${fmt(p.createdAt)} にアカウント作成 ・ 編集 ${p.editCount} 回 ・ 作ったページ ${p.created.length} 件</p></div>
-      ${me ? '<div class="btns"><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>' : ''}
-    </div>
-    <div class="admin-grid">
-      <section class="panel">
-        <h2>作ったページ <small>${p.created.length}件</small></h2>
-        ${p.created.length ? `<ul>${p.created.map(c => `<li><a href="${KINDS[c.col].view(c.slug)}">${esc(c.name)}</a>${c.col === 'articles' ? ' <span class="badge">記事</span>' : ''} <span class="muted small">${fmt(c.at)}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
-      </section>
-      <section class="panel">
-        <h2>最近の編集 <small>${p.editCount}件</small></h2>
-        ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
-      </section>
-    </div>`;
+    <section class="profile-head">
+      <div class="profile-avatar" aria-hidden="true">${esc([...p.name][0] || '?')}</div>
+      <div class="profile-main">
+        <h1 class="page-title">${esc(p.name)}</h1>
+        <p class="muted small">${fmt(p.createdAt)} から参加 ・ 編集 ${p.editCount} 回 ・ MODページ ${nMods} ・ 記事 ${nArticles}</p>
+        <div class="profile-bio">
+          <div class="bio-view md">${p.bio ? renderMarkdown(p.bio) : `<p class="muted">${me ? 'まだ自己紹介がありません。「自己紹介を編集」から書けます。' : 'まだ自己紹介はありません。'}</p>`}</div>
+          ${me ? `<form class="bio-form" hidden>
+            <textarea name="bio" maxlength="1000" rows="5" placeholder="好きなMOD、よく遊ぶバージョン、得意なジャンルなど（**太字**などの書き方も使えます）">${esc(p.bio || '')}</textarea>
+            <div class="btns"><span class="muted small bio-count"></span><button type="button" class="btn" data-bio-cancel>やめる</button><button class="btn primary">保存する</button></div>
+          </form>` : ''}
+        </div>
+      </div>
+      ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>` : ''}
+    </section>
+    <section class="profile-section">
+      <h2 class="section-title">🧱 作ったMODページ <small class="muted">${nMods}件</small></h2>
+      ${cardsFor('pages')}
+    </section>
+    <section class="profile-section">
+      <h2 class="section-title">📝 書いた記事 <small class="muted">${nArticles}件</small></h2>
+      ${cardsFor('articles')}
+    </section>
+    <section class="panel profile-section">
+      <h2>最近の編集 <small>${p.editCount}件</small></h2>
+      ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
+    </section>`;
+  // 自己紹介の編集
+  const bioForm = app.querySelector('.bio-form');
+  if (bioForm) {
+    const view = app.querySelector('.bio-view');
+    const count = () => { bioForm.querySelector('.bio-count').textContent = `${bioForm.bio.value.length} / 1000`; };
+    const toggle = editing => { bioForm.hidden = !editing; view.hidden = editing; if (editing) { count(); bioForm.bio.focus(); } };
+    app.querySelector('[data-bio-edit]').addEventListener('click', () => toggle(true));
+    bioForm.querySelector('[data-bio-cancel]').addEventListener('click', () => toggle(false));
+    bioForm.bio.addEventListener('input', count);
+    bioForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      try {
+        const { bio } = await api('/account/profile', { method: 'POST', body: JSON.stringify({ bio: bioForm.bio.value }) });
+        view.innerHTML = bio ? renderMarkdown(bio) : '<p class="muted">まだ自己紹介がありません。「自己紹介を編集」から書けます。</p>';
+        toggle(false);
+        toast('自己紹介を保存しました');
+      } catch (err) { alert(err.message); }
+    });
+  }
   app.querySelector('[data-logout]')?.addEventListener('click', logout);
   app.querySelector('[data-claim]')?.addEventListener('click', async () => {
     try {
@@ -524,7 +566,7 @@ async function renderView(col, slug) {
     ${m.locked ? `<div class="notice lock">🔒 このページはロックされています。${state.admin ? '（管理者は編集できます）' : '管理者のみ編集できます。'}</div>` : ''}
     ${pageView(m, col)}
     <div class="page-foot">
-      <span>最終更新: ${fmt(m.updatedAt)}（${esc(m.updatedBy)}）・ 作成: ${esc(m.createdBy)} ・ 版 ${m.rev}</span>
+      <span>作成: ${m.createdUid ? `<a class="user-link" href="${userHref(m.createdBy)}">👤 ${esc(m.createdBy)}</a>` : esc(m.createdBy)} ・ 最終更新: ${fmt(m.updatedAt)}（${m.log?.[0]?.uid ? `<a class="user-link" href="${userHref(m.updatedBy)}">👤 ${esc(m.updatedBy)}</a>` : esc(m.updatedBy)}）・ 版 ${m.rev}</span>
       <button type="button" class="linkish report-link" data-report>🚩 このページを通報</button>
     </div>`;
   bindPageView();
