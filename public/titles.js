@@ -5,7 +5,7 @@ export const MAX_TITLES = 2;
 
 export const TITLES = [
   { id: 'newbie', name: '新人', desc: 'アカウントを作った', need: () => true },
-  { id: 'pioneer', name: '古参', desc: '2026年中にアカウントを作った', need: s => s.createdAt < '2027-01-01' },
+  { id: 'pioneer', name: '古参', desc: '2026年11月までにアカウントを作った', need: s => s.createdAt < '2026-11-30T15:00:00.000Z' },
   { id: 'first-step', name: 'はじめての一歩', desc: 'MODページか記事を1つ作った', need: s => s.created >= 1 },
   { id: 'crafter', name: 'MOD職人', desc: 'MODページか記事を5つ作った', need: s => s.created >= 5 },
   { id: 'doctor', name: 'MOD博士', desc: 'MODページか記事を15作った', need: s => s.created >= 15 },
