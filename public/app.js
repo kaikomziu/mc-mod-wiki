@@ -715,8 +715,9 @@ async function renderSearch() {
   setMeta(pageTitle(q ? `「${q}」の検索結果` : '検索'));
   app.innerHTML = `
     <h1 class="page-title">検索</h1>
-    <form class="search-page-form" role="search"><input class="search" name="q" type="search" value="${esc(q)}" placeholder="MOD名・アイテム名・エラー内容など" autofocus><button class="btn primary">検索</button></form>
-    <div class="search-results">${q ? '<div class="loading">検索中…</div>' : '<p class="muted">MODページとまとめ記事の本文から探します。スペースで区切ると、すべてを含むページを探します。<br>Wikiにまだ無いMODは、Modrinth・CurseForge からも探して表示します（英語名で探すとよく見つかります）。</p>'}</div>
+    <form class="search-page-form" role="search"><input class="search" name="q" type="search" value="${esc(q)}" placeholder="MOD名・アイテム名・エラー内容・ユーザー名など" autofocus><button class="btn primary">検索</button></form>
+    <div class="user-results"></div>
+    <div class="search-results">${q ? '<div class="loading">検索中…</div>' : '<p class="muted">MODページとまとめ記事の本文、ユーザー名から探します。スペースで区切ると、すべてを含むページを探します。<br>Wikiにまだ無いMODは、Modrinth・CurseForge からも探して表示します（英語名で探すとよく見つかります）。</p>'}</div>
     <div class="external-results"></div>`;
   if (q) renderExternal(q);
   app.querySelector('form').addEventListener('submit', e => {
@@ -725,6 +726,7 @@ async function renderSearch() {
     navigate(v ? `/search?q=${encodeURIComponent(v)}` : '/search');
   });
   if (!q) return;
+  renderUserResults(q);
   let results;
   try { results = await api(`/search?q=${encodeURIComponent(q)}`); } catch (e) { app.querySelector('.search-results').innerHTML = errorBox(e); return; }
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -743,6 +745,24 @@ async function renderSearch() {
         <p>${mark(r.snippet)}</p>
       </li>`).join('')}</ol>`
     : `<div class="empty">「${esc(q)}」に一致するページはありませんでした。${canEdit() ? `<br><br><a class="btn" href="${u('/new')}">MODページを作る</a> <a class="btn" href="${u('/articles/new')}">記事を書く</a>` : ''}</div>`;
+}
+
+// 名前にキーワードを含むユーザー（プロフィールへのリンク）
+async function renderUserResults(q) {
+  const box = app.querySelector('.user-results');
+  if (!state.users.size) await loadUsers();
+  if (!app.contains(box)) return;
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = [...state.users.values()]
+    .filter(a => words.every(w => a.name.toLowerCase().includes(w)))
+    .sort((a, b) => (a.name.toLowerCase() === q.toLowerCase() ? -1 : 0) - (b.name.toLowerCase() === q.toLowerCase() ? -1 : 0) || a.name.localeCompare(b.name))
+    .slice(0, 20);
+  box.innerHTML = hits.length ? `
+    <section class="user-hits">
+      <h2 class="section-title">👤 ユーザー（${hits.length}）</h2>
+      <ul class="user-hit-list">${hits.map(a => `
+        <li><a class="user-hit" href="${userHref(a.name)}">${avatarHtml(a, 'nav-avatar')} <strong>${esc(a.name)}</strong>${titleBadges(a.titles)}</a></li>`).join('')}</ul>
+    </section>` : '';
 }
 
 // Wikiにまだ無いMODを Modrinth / CurseForge から探して、ページ作成につなげる

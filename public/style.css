@@ -489,3 +489,9 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .locked-titles { margin-bottom: 10px; }
 .locked-titles ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
 @media (max-width: 760px) { .nav-titles { display: none; } }
+
+/* 検索：ユーザー */
+.user-hits { margin-bottom: 16px; }
+.user-hit-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.user-hit { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); text-decoration: none; color: inherit; }
+.user-hit:hover { border-color: var(--accent); }
