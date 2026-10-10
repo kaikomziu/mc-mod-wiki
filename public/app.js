@@ -1,7 +1,7 @@
 import { VERSIONS, LOADERS, TAGS } from './tags.js';
 import { config, u, appPath } from './paths.js';
 import { TITLES, MAX_TITLES, titleLabel } from './titles.js';
-import { esc, inline, renderMarkdown, setModResolver } from './markdown.js';
+import { esc, inline, renderMarkdown, setModResolver, videoInfo } from './markdown.js';
 import { fmt, KINDS, card, pageView, formatDownloads, homeIntro } from './views.js';
 import {
   homeTitle, pageTitle, modTitle, listTitle, modDescription, listDescription, articleTitle, articleDescription,
@@ -949,6 +949,7 @@ const TOOLBAR = [
   ['🔗', 'リンク', 'wrap', '[', '](https://)', 'リンク文字'],
   ['📄', '他のMODページ', 'wrap', '[[', ']]', 'ページID'],
   ['📷', '画像・GIFをカーソル位置にアップロード（貼り付け・ドラッグ＆ドロップでもOK）', 'upload'],
+  ['🎬', '動画（YouTube・ニコニコ動画）を貼る', 'video'],
   ['表', '表', 'insert', '\n| 項目 | 説明 |\n|---|---|\n| | |\n'],
   ['🧱', '作業台レシピ', 'insert', RECIPE_CRAFT],
   ['🔥', 'かまどレシピ', 'insert', RECIPE_SMELT],
@@ -1164,6 +1165,19 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
     if (kind === 'upload') {
       const files = await pickFile({ multiple: true });
       if (files.length) insertImages(files);
+      return;
+    }
+    if (kind === 'video') {
+      const url = prompt('YouTube かニコニコ動画のURLを入れてください\n（例: https://www.youtube.com/watch?v=… / https://youtu.be/…）');
+      if (!url) return;
+      if (!videoInfo(url)) { alert('YouTube かニコニコ動画の動画URLを入れてください。'); return; }
+      const caption = prompt('動画の下に出す説明（なくてもOK）', '紹介動画') || '';
+      const before = v.slice(0, s);
+      const pre = !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+      ta.setRangeText(`${pre}${caption ? `![${caption.replace(/[[\]]/g, '')}](${url.trim()})` : url.trim()}\n\n`, s, e, 'end');
+      ta.focus();
+      dirty(); refresh();
+      toast('🎬 動画を入れました（プレビューで確認できます）');
       return;
     }
     if (kind === 'template') {
@@ -1641,6 +1655,7 @@ const HELP = [
   ['リンク', '[CurseForge](https://www.curseforge.com)'],
   ['MODページへ', '[[jei]] や [[jei|JEIはこちら]]'],
   ['画像・GIF', '![説明](画像のURL)\n（📷ボタン・貼り付け・ドラッグ＆ドロップで\nカーソル位置にアップロード）'],
+  ['動画', 'https://youtu.be/動画のID\n![紹介動画](https://www.youtube.com/watch?v=…)\n（YouTube・ニコニコ動画のURLだけの行が動画になる。\n🎬ボタンからも入れられる）'],
   ['画像の大きさ', '![説明|300](画像のURL)\n![説明|小](画像のURL)\n（数字＝幅px。小・中・大も使える）'],
   ['表', '| キー | 動作 |\n|---|---|\n| R | レシピ |'],
   ['作業台レシピ', '```recipe\n鉄 | 鉄 | 鉄\n   | 棒 |\n   | 棒 |\n=> 鉄のツルハシ\n```'],
@@ -1659,7 +1674,7 @@ function renderHelp() {
     <div class="md">
       <div class="table-wrap"><table class="help-table">
         <thead><tr><th>用途</th><th>書き方</th><th>表示</th></tr></thead>
-        <tbody>${HELP.map(([n, src]) => `<tr><td>${n}</td><td><pre><code>${esc(src)}</code></pre></td><td>${n.startsWith('画像') ? '<span class="muted">（画像が表示されます）</span>' : renderMarkdown(src)}</td></tr>`).join('')}</tbody>
+        <tbody>${HELP.map(([n, src]) => `<tr><td>${n}</td><td><pre><code>${esc(src)}</code></pre></td><td>${n.startsWith('画像') || n === '動画' ? `<span class="muted">（${n === '動画' ? '動画' : '画像'}が表示されます）</span>` : renderMarkdown(src)}</td></tr>`).join('')}</tbody>
       </table></div>
       <p>改行はそのまま改行として表示されます。空行で段落が分かれます。</p>
       <h2>レシピの書き方</h2>

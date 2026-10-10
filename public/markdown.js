@@ -42,6 +42,35 @@ export function inline(src) {
   return s;
 }
 
+// 動画の埋め込み（YouTube・ニコニコ動画）。URL だけの行、または ![説明](動画のURL) だけの行が動画になる
+export function videoInfo(raw) {
+  let url;
+  try { url = new URL(String(raw).trim()); } catch { return null; }
+  const host = url.hostname.replace(/^(www|m|music)\./, '');
+  let id = '';
+  if (host === 'youtu.be') id = url.pathname.slice(1);
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    id = url.searchParams.get('v') || (url.pathname.match(/^\/(?:shorts|embed|live)\/([^/?#]+)/) || [])[1] || '';
+  }
+  if (/^[\w-]{11}$/.test(id)) {
+    const t = url.searchParams.get('t') || url.searchParams.get('start') || '';
+    const tm = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+    const start = tm ? (+tm[1] || 0) * 3600 + (+tm[2] || 0) * 60 + (+tm[3] || 0) : 0;
+    return { site: 'youtube', src: `https://www.youtube-nocookie.com/embed/${id}${start ? `?start=${start}` : ''}`, link: `https://www.youtube.com/watch?v=${id}`, vertical: /^\/shorts\//.test(url.pathname) };
+  }
+  const nico = host.endsWith('nicovideo.jp') || host === 'nico.ms' ? (url.pathname.match(/((?:sm|nm|so)\d+)/) || [])[1] : '';
+  if (nico) return { site: 'niconico', src: `https://embed.nicovideo.jp/watch/${nico}`, link: `https://www.nicovideo.jp/watch/${nico}` };
+  return null;
+}
+const VIDEO_LINE = /^\s*(?:!\[([^\]]*)\]\((\S+?)\)|<?(https?:\/\/\S+?)>?)\s*$/;
+function renderVideo(line) {
+  const m = line.match(VIDEO_LINE);
+  const v = m && videoInfo(m[2] || m[3]);
+  if (!v) return '';
+  const title = (m[1] || '').replace(/\s*\|.*$/, '').trim();
+  return `<figure class="video${v.vertical ? ' vertical' : ''}"><div class="video-frame"><iframe src="${esc(v.src)}" title="${esc(title || '動画')}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>${title ? `<figcaption>${esc(title)}</figcaption>` : ''}</figure>`;
+}
+
 const RE = {
   fence: /^```/, heading: /^(#{1,4})\s+(.+)$/, hr: /^\s*([-*_])(\s*\1){2,}\s*$/,
   quote: /^>\s?/, list: /^(\s*)([-*+]|\d+\.)\s+(.*)$/, tableSep: /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/,
@@ -107,7 +136,7 @@ export function renderMarkdown(md, headings = []) {
   const lines = md.replace(/\r\n?/g, '\n').split('\n');
   let html = '';
   let i = 0;
-  const startsBlock = (l, next) => RE.fence.test(l) || RE.heading.test(l) || RE.hr.test(l) || RE.quote.test(l) ||
+  const startsBlock = (l, next) => !!renderVideo(l) || RE.fence.test(l) || RE.heading.test(l) || RE.hr.test(l) || RE.quote.test(l) ||
     RE.list.test(l) || (l.trim().startsWith('|') && next !== undefined && RE.tableSep.test(next));
 
   while (i < lines.length) {
@@ -132,6 +161,8 @@ export function renderMarkdown(md, headings = []) {
       i++; continue;
     }
     if (RE.hr.test(line)) { html += '<hr>'; i++; continue; }
+    const video = renderVideo(line);
+    if (video) { html += video; i++; continue; }
     if (RE.quote.test(line)) {
       const buf = [];
       while (i < lines.length && RE.quote.test(lines[i])) buf.push(lines[i++].replace(RE.quote, ''));
