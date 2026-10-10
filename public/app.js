@@ -11,7 +11,7 @@ import {
 const app = document.getElementById('app');
 const state = {
   mods: [], articles: [], q: '', version: '', loader: '', tags: [],
-  dirty: false, admin: false, editLocked: false, openReports: 0, account: null, users: new Map(), news: [],
+  dirty: false, admin: false, editLocked: false, openReports: 0, openContacts: 0, account: null, users: new Map(), news: [],
 };
 const USER_KEY = 'modwiki-user';
 const TOKEN_KEY = 'modwiki-admin';
@@ -158,7 +158,7 @@ function openModal(title, html, onSubmit, { submitLabel = 'OK', wide = false } =
 async function refreshSettings() {
   try {
     const s = await api('/settings');
-    Object.assign(state, { editLocked: s.editLocked, admin: s.isAdmin, openReports: s.openReports || 0, account: s.account || null });
+    Object.assign(state, { editLocked: s.editLocked, admin: s.isAdmin, openReports: s.openReports || 0, openContacts: s.openContacts || 0, account: s.account || null });
     if (!s.isAdmin) store.set(TOKEN_KEY, '');
     if (!s.account) store.set(SESSION_KEY, '');
   } catch { /* 取得できなくても閲覧は続行 */ }
@@ -171,7 +171,7 @@ async function refreshSettings() {
   document.getElementById('admin-link')?.remove();
   if (state.admin) {
     document.querySelector('.site-header nav').insertAdjacentHTML('beforeend',
-      `<a id="admin-link" href="${u('/admin')}">👑 管理${state.openReports ? `<span class="nav-badge" title="未対応の通報">${state.openReports}</span>` : ''}</a>`);
+      `<a id="admin-link" href="${u('/admin')}">👑 管理${state.openReports + state.openContacts ? `<span class="nav-badge" title="未対応の通報・お問い合わせ">${state.openReports + state.openContacts}</span>` : ''}</a>`);
   }
   const banner = document.getElementById('site-banner');
   banner.hidden = !state.editLocked;
@@ -776,6 +776,42 @@ function bindComments(col, slug) {
       toast('💬 コメントしました');
     } catch (err) { alert(err.message); }
     btn.disabled = false;
+  });
+}
+
+/* ===== お問い合わせ ===== */
+const CONTACT_TYPES = ['質問', '要望・アイデア', '不具合の報告', '削除・修正の依頼', 'その他'];
+function renderContact() {
+  setMeta(pageTitle('お問い合わせ'), 'Minecraft MOD Wiki の運営へのお問い合わせ');
+  const from = new URLSearchParams(location.search).get('page') || '';
+  app.innerHTML = `
+    <h1 class="page-title">📮 運営へのお問い合わせ</h1>
+    <p class="lead">質問・要望・不具合の報告などはこちらからどうぞ。内容は運営（管理者）だけが見られます。</p>
+    <p class="muted small">特定のページの荒らし・間違いは、そのページ下の「🚩 このページを通報」からも送れます。</p>
+    <form class="panel contact-form">
+      <label class="field"><span>種類</span>
+        <select name="type">${CONTACT_TYPES.map(t => `<option>${t}</option>`).join('')}</select></label>
+      ${state.account ? `<div class="field"><span>送る人</span><div class="as-account">👤 <strong>${esc(state.account.name)}</strong> として送ります</div></div>`
+        : `<label class="field"><span>名前 <small>任意</small></span><input name="user" maxlength="24" value="${esc(getUser() || '')}"></label>`}
+      <label class="field"><span>返信先 <small>任意・返事がほしいときだけ（メールアドレス・Xのアカウントなど）。運営以外には公開されません</small></span><input name="reply" maxlength="120" placeholder="例: steve@example.com / @steve_mc"></label>
+      <label class="field"><span>関係するページ <small>任意</small></span><input name="page" maxlength="200" value="${esc(from)}" placeholder="例: https://kaikomziu.github.io/mc-mod-wiki/mod/jei"></label>
+      <label class="field"><span>お問い合わせ内容 <b class="req">必須</b></span><textarea name="message" rows="7" maxlength="3000" required></textarea></label>
+      <input name="website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <div class="btns"><button class="btn primary">送信する</button></div>
+    </form>`;
+  const form = app.querySelector('.contact-form');
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    btn.disabled = true;
+    try {
+      await api('/contact', { method: 'POST', body: JSON.stringify({
+        type: form.type.value, user: form.user?.value || '', reply: form.reply.value, page: form.page.value,
+        message: form.message.value, website: form.website.value,
+      }) });
+      app.innerHTML = `<h1 class="page-title">📮 運営へのお問い合わせ</h1>
+        <div class="empty">送信しました。ありがとうございます！<br>${form.reply.value.trim() ? '返事が必要な内容には、入力していただいた返信先にお返事します。' : '返信先が無いため、お返事はできません。'}<br><br><a class="btn" href="${u('/')}">トップへ戻る</a></div>`;
+    } catch (err) { alert(err.message); btn.disabled = false; }
   });
 }
 
@@ -1572,6 +1608,20 @@ async function renderAdmin() {
           <button class="linkish" data-news-edit="${n.id}">編集</button><button class="linkish danger-text" data-news-del="${n.id}">削除</button></li>`).join('')}</ul>`
         : '<p class="muted">まだありません。</p>'}
     </section>
+    <section class="panel contacts-panel">
+      <h2>📮 お問い合わせ <small>未対応 ${s.contacts.filter(c => !c.done).length}件 / 全${s.contacts.length}件</small></h2>
+      ${s.contacts.length ? `<ul class="reports">${s.contacts.map(c => `
+        <li class="${c.done ? 'done' : ''}">
+          <div><span class="badge${c.done ? '' : ' warn'}">${esc(c.type)}</span>${c.done ? ' <span class="badge">✓ 対応済み</span>' : ''}
+            <span class="muted small">${fmt(c.at)} ・ ${c.uid ? userLabel(c) : esc(c.user || '名前なし')}</span></div>
+          <p class="contact-message">${esc(c.message).replace(/\n/g, '<br>')}</p>
+          ${c.reply ? `<div class="small">↩ 返信先: <strong>${esc(c.reply)}</strong></div>` : ''}
+          ${c.page ? `<div class="small muted">ページ: ${/^https?:\/\//.test(c.page) ? `<a href="${esc(c.page)}" target="_blank" rel="noopener">${esc(c.page)}</a>` : esc(c.page)}</div>` : ''}
+          <div class="btns"><button class="btn" data-contact-done="${c.id}" data-done="${c.done ? '' : '1'}">${c.done ? '↺ 未対応に戻す' : '✓ 対応済みにする'}</button>
+            <button class="btn danger" data-contact-del="${c.id}">🗑 削除</button>
+            ${c.ipHash ? `<button class="btn danger" data-ban="${c.ipHash}" data-user="${esc(c.user || '問い合わせ者')}">送り主をブロック</button>` : ''}</div>
+        </li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
+    </section>
     <div class="admin-grid">
       <section class="panel">
         <h2>サイト全体の編集</h2>
@@ -1678,6 +1728,11 @@ async function renderAdmin() {
     adminAction('/admin/unban', 'POST', { ipHash: b.dataset.unban }, 'ブロックを解除しました')));
   app.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', () =>
     adminAction(`/${b.dataset.restore}/restore`, 'POST', null, '復元しました')));
+  app.querySelectorAll('[data-contact-done]').forEach(b => b.addEventListener('click', () =>
+    adminAction('/admin/contact', 'POST', { id: b.dataset.contactDone, done: !!b.dataset.done }, b.dataset.done ? '対応済みにしました' : '未対応に戻しました')));
+  app.querySelectorAll('[data-contact-del]').forEach(b => b.addEventListener('click', () => {
+    if (confirm('このお問い合わせを削除しますか？')) adminAction('/admin/contact', 'POST', { id: b.dataset.contactDel, remove: true }, '削除しました');
+  }));
   app.querySelectorAll('[data-resolve]').forEach(b => b.addEventListener('click', () =>
     adminAction('/admin/resolve-report', 'POST', { id: b.dataset.resolve }, '対応済みにしました')));
   app.querySelectorAll('[data-delimg]').forEach(b => b.addEventListener('click', () => {
@@ -1799,6 +1854,7 @@ async function route() {
   else if (a === 'article' && b && !c) await renderView('articles', b);
   else if (a === 'search') await renderSearch();
   else if (a === 'news') await renderNews();
+  else if (a === 'contact') renderContact();
   else if (a === 'recent') await renderRecent();
   else if (a === 'help') renderHelp();
   else if (a === 'admin') await renderAdmin();

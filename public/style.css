@@ -533,3 +533,11 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .comment-setting { display: block; margin: 4px 0 8px; }
 .comment-setting small { display: block; margin-left: 24px; }
 .comment-login { margin-top: 8px; }
+
+/* お問い合わせ */
+.contact-form { display: grid; gap: 12px; max-width: 720px; }
+.contact-form select, .contact-form textarea { font: inherit; font-size: 15px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); width: 100%; }
+.contact-form textarea { resize: vertical; }
+.contact-message { white-space: normal; overflow-wrap: anywhere; margin: 6px 0; }
+.contacts-panel li.done { opacity: .6; }
+.footer-contact { margin: 12px 0 0; font-size: 14px; }
