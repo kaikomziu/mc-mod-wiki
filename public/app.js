@@ -1,5 +1,6 @@
 import { VERSIONS, LOADERS, TAGS } from './tags.js';
 import { config, u, appPath } from './paths.js';
+import { TITLES, MAX_TITLES, titleLabel } from './titles.js';
 import { esc, inline, renderMarkdown, setModResolver } from './markdown.js';
 import { fmt, KINDS, card, pageView, formatDownloads, homeIntro } from './views.js';
 import {
@@ -10,7 +11,7 @@ import {
 const app = document.getElementById('app');
 const state = {
   mods: [], articles: [], q: '', version: '', loader: '', tags: [],
-  dirty: false, admin: false, editLocked: false, openReports: 0, account: null,
+  dirty: false, admin: false, editLocked: false, openReports: 0, account: null, users: new Map(),
 };
 const USER_KEY = 'modwiki-user';
 const TOKEN_KEY = 'modwiki-admin';
@@ -66,14 +67,22 @@ const authHeaders = () => ({
 });
 const userHref = name => u(`/user/${encodeURIComponent(name)}`);
 // 履歴などの名前表示（アカウントならプロフィールへのリンク）
-const userLabel = e => (e.uid ? `<a class="user-link" href="${userHref(e.user)}">👤 ${esc(e.user)}</a>` : esc(e.user || ''));
+const titleBadges = labels => (labels || []).map(t => `<span class="title-badge">【${esc(t)}】</span>`).join('');
+// アカウントの名前は、アイコン＋名前＋肩書き（state.users にある最新の情報を使う）
+const userLabel = e => {
+  if (!e.uid) return esc(e.user || '');
+  const info = state.users.get(e.uid);
+  const name = info?.name || e.user;
+  return `<a class="user-link" href="${userHref(name)}">${avatarHtml(info || { name }, 'mini-avatar')} ${esc(name)}</a>${titleBadges(info?.titles)}`;
+};
 async function api(path, opts = {}) {
   const r = await fetch(config.api + path, { cache: 'no-store', ...opts, headers: { 'content-type': 'application/json', ...authHeaders(), ...opts.headers } });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(data.error || `エラー (${r.status})`), { status: r.status, data });
   return data;
 }
-const loadData = async () => { [state.mods, state.articles] = await Promise.all([api('/pages'), api('/articles')]); };
+const loadUsers = async () => { state.users = new Map((await api('/users').catch(() => [])).map(a => [a.uid, a])); };
+const loadData = async () => { [state.mods, state.articles] = await Promise.all([api('/pages'), api('/articles'), loadUsers()]); };
 const listOf = col => (col === 'articles' ? state.articles : state.mods);
 const delta = d => `<span class="delta ${d > 0 ? 'plus' : d < 0 ? 'minus' : ''}">${d > 0 ? '+' : ''}${d}</span>`;
 const getUser = () => store.get(USER_KEY);
@@ -153,7 +162,7 @@ async function refreshSettings() {
   updateDraftLink();
   document.getElementById('account-link')?.remove();
   document.querySelector('.site-header nav').insertAdjacentHTML('beforeend', state.account
-    ? `<a id="account-link" href="${userHref(state.account.name)}">${avatarHtml(state.account, 'nav-avatar')} ${esc(state.account.name)}</a>`
+    ? `<a id="account-link" href="${userHref(state.account.name)}">${avatarHtml(state.account, 'nav-avatar')} ${esc(state.account.name)}<span class="nav-titles">${titleBadges(state.account.titleLabels)}</span></a>`
     : `<a id="account-link" href="${u('/login')}">ログイン</a>`);
   document.getElementById('admin-link')?.remove();
   if (state.admin) {
@@ -197,7 +206,8 @@ function openAuth(mode = 'login') {
   const signup = mode === 'signup';
   const form = openModal(signup ? 'アカウントを作る' : 'ログイン', `
     <div class="auth-tabs"><button type="button" class="${signup ? '' : 'on'}" data-mode="login">ログイン</button><button type="button" class="${signup ? 'on' : ''}" data-mode="signup">アカウントを作る</button></div>
-    <label class="field"><span>ユーザー名</span><input name="name" maxlength="20" required autocomplete="username" value="${esc(signup ? getUser() : '')}"></label>
+    <label class="field"><span>${signup ? 'ユーザー名' : 'ユーザー名 または メールアドレス'}</span><input name="name" maxlength="${signup ? 20 : 120}" required autocomplete="username" value="${esc(signup ? getUser() : '')}"></label>
+    ${signup ? '<label class="field"><span>メールアドレス <small>任意・本物でなくてもOK（ログインに使えます）</small></span><input name="email" type="email" maxlength="120" autocomplete="email" placeholder="例: steve@example.com"></label>' : ''}
     <label class="field"><span>パスワード${signup ? ' <small>6文字以上</small>' : ''}</span><input name="password" type="password" minlength="6" required autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
     ${signup ? '<label class="field"><span>パスワード（確認）</span><input name="password2" type="password" minlength="6" required autocomplete="new-password"></label>' : ''}
     <input name="website" class="hp" tabindex="-1" aria-hidden="true">
@@ -205,7 +215,7 @@ function openAuth(mode = 'login') {
   async f => {
     if (signup && f.password.value !== f.password2.value) throw new Error('パスワードが一致しません。');
     const res = await api(`/account/${signup ? 'signup' : 'login'}`, {
-      method: 'POST', body: JSON.stringify({ name: f.name.value, password: f.password.value, website: f.website.value }),
+      method: 'POST', body: JSON.stringify({ name: f.name.value, password: f.password.value, email: f.email?.value || '', website: f.website.value }),
     });
     store.set(SESSION_KEY, res.token);
     setUser(res.account.name);
@@ -248,7 +258,7 @@ async function renderUser(name) {
         ${me ? `<div class="avatar-actions"><button type="button" class="linkish small" data-avatar-change>📷 アイコンを変更</button>${p.avatar ? '<button type="button" class="linkish small muted" data-avatar-remove>外す</button>' : ''}</div>` : ''}
       </div>
       <div class="profile-main">
-        <h1 class="page-title">${esc(p.name)}</h1>
+        <h1 class="page-title">${esc(p.name)}${titleBadges(p.titleLabels)}</h1>
         <p class="muted small">${fmt(p.createdAt)} から参加 ・ 編集 ${p.editCount} 回 ・ MODページ ${nMods} ・ 記事 ${nArticles}</p>
         <div class="profile-stats">
           <button type="button" class="stat-link" data-list="following"><b>${p.following}</b> フォロー</button>
@@ -266,6 +276,24 @@ async function renderUser(name) {
       ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>`
         : `<div class="btns profile-actions"><button class="btn follow-btn${p.isFollowing ? '' : ' primary'}" data-follow>${p.isFollowing ? '✓ フォロー中' : '＋ フォローする'}</button></div>`}
     </section>
+    ${me ? `
+    <section class="panel profile-section titles-panel">
+      <h2>🏷 肩書き <small>持っている中から${MAX_TITLES}つまで選ぶと、名前の横に表示されます</small></h2>
+      <div class="title-picker">
+        ${p.owned.map(id => `<button type="button" class="chip title-chip${(p.titles || []).includes(id) ? ' on' : ''}" data-title="${esc(id)}" title="${esc(TITLES.find(t => t.id === id)?.desc || '管理者から贈られた肩書き')}">【${esc(titleLabel(id))}】</button>`).join('')}
+      </div>
+      ${TITLES.some(t => !p.owned.includes(t.id)) ? `<details class="locked-titles"><summary class="muted small">まだ持っていない肩書き（${TITLES.filter(t => !p.owned.includes(t.id)).length}）</summary>
+        <ul>${TITLES.filter(t => !p.owned.includes(t.id)).map(t => `<li><span class="title-badge locked">【${esc(t.name)}】</span> <span class="muted small">${esc(t.desc)}</span></li>`).join('')}</ul></details>` : ''}
+      <div class="btns"><span class="muted small title-count"></span><button type="button" class="btn primary" data-save-titles>肩書きを保存</button></div>
+    </section>
+    <section class="panel profile-section">
+      <h2>⚙ アカウント設定 <small>ここはあなたにしか見えません</small></h2>
+      <form class="email-form">
+        <label class="field"><span>メールアドレス <small>本物でなくてもOK・ログインに使えます</small></span>
+          <div class="input-with-btn"><input name="email" type="email" maxlength="120" value="${esc(state.account?.email || '')}" placeholder="未設定"><button class="btn">保存</button></div>
+        </label>
+      </form>
+    </section>` : ''}
     <section class="profile-section">
       <h2 class="section-title">🧱 作ったMODページ <small class="muted">${nMods}件</small></h2>
       ${cardsFor('pages')}
@@ -285,6 +313,36 @@ async function renderUser(name) {
       <h2>最近の編集 <small>${p.editCount}件</small></h2>
       ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
     </section>`;
+  // 肩書きを選ぶ（2つまで）
+  const picker = app.querySelector('.title-picker');
+  if (picker) {
+    const chips = [...picker.querySelectorAll('.title-chip')];
+    const count = () => { app.querySelector('.title-count').textContent = `${chips.filter(c => c.classList.contains('on')).length} / ${MAX_TITLES} 選択中`; };
+    count();
+    chips.forEach(c => c.addEventListener('click', () => {
+      if (!c.classList.contains('on') && chips.filter(x => x.classList.contains('on')).length >= MAX_TITLES) { toast(`肩書きは${MAX_TITLES}つまでです`); return; }
+      c.classList.toggle('on');
+      count();
+    }));
+    app.querySelector('[data-save-titles]').addEventListener('click', async () => {
+      try {
+        await api('/account/titles', { method: 'POST', body: JSON.stringify({ titles: chips.filter(c => c.classList.contains('on')).map(c => c.dataset.title) }) });
+        await Promise.all([refreshSettings(), loadUsers()]);
+        toast('肩書きを保存しました');
+        route();
+      } catch (err) { alert(err.message); }
+    });
+  }
+  // メールアドレスの変更
+  app.querySelector('.email-form')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      const r = await api('/account/profile', { method: 'POST', body: JSON.stringify({ email: e.target.email.value }) });
+      state.account.email = r.email;
+      toast(r.email ? 'メールアドレスを保存しました' : 'メールアドレスを外しました');
+    } catch (err) { alert(err.message); }
+  });
+
   // フォローする／やめる
   app.querySelector('[data-follow]')?.addEventListener('click', async e => {
     if (!state.account) { openAuth('login'); toast('フォローするにはログインしてください'); return; }
@@ -770,7 +828,7 @@ async function renderView(col, slug) {
     ${m.locked ? `<div class="notice lock">🔒 このページはロックされています。${state.admin ? '（管理者は編集できます）' : '管理者のみ編集できます。'}</div>` : ''}
     ${pageView(m, col)}
     <div class="page-foot">
-      <span>作成: ${m.createdUid ? `<a class="user-link" href="${userHref(m.createdBy)}">👤 ${esc(m.createdBy)}</a>` : esc(m.createdBy)} ・ 最終更新: ${fmt(m.updatedAt)}（${m.log?.[0]?.uid ? `<a class="user-link" href="${userHref(m.updatedBy)}">👤 ${esc(m.updatedBy)}</a>` : esc(m.updatedBy)}）・ 版 ${m.rev}</span>
+      <span>作成: ${userLabel({ uid: m.createdUid, user: m.createdBy })} ・ 最終更新: ${fmt(m.updatedAt)}（${userLabel({ uid: m.log?.[0]?.uid, user: m.updatedBy })}）・ 版 ${m.rev}</span>
       <button type="button" class="linkish report-link" data-report>🚩 このページを通報</button>
     </div>`;
   bindPageView();
@@ -1391,6 +1449,13 @@ async function renderAdmin() {
           : '<p class="muted">ありません。履歴や最近の更新の「🚫 ブロック」から追加できます。</p>'}
       </section>
       <section class="panel">
+        <h2>🏷 特別な肩書きを贈る</h2>
+        <p class="muted small">アカウントに肩書き（例: サイト管理人・公式ライター）を付けます。もらった人はプロフィールで選んで表示できます。</p>
+        <form class="grant-form">
+          <div class="input-with-btn"><input name="account" placeholder="アカウント名" required maxlength="20"><input name="title" placeholder="肩書き（12文字まで）" required maxlength="12"><button class="btn" name="mode" value="add">付ける</button><button class="btn danger" name="mode" value="remove">外す</button></div>
+        </form>
+      </section>
+      <section class="panel">
         <h2>名前でアカウントに紐付け</h2>
         <p class="muted small">ゲストIDが無かった頃（アカウント機能より前）の編集を、入力したユーザー名ごとアカウントのものにします。</p>
         <form class="attribute-form">
@@ -1416,6 +1481,16 @@ async function renderAdmin() {
     await refreshSettings();
     toast('ログアウトしました');
     navigate('/');
+  });
+  app.querySelector('.grant-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const remove = e.submitter?.value === 'remove';
+    try {
+      const r = await api('/admin/grant-title', { method: 'POST', body: JSON.stringify({ account: f.account.value, title: f.title.value, remove }) });
+      toast(`${r.account} の肩書き: ${r.granted.map(t => `【${t}】`).join('') || 'なし'}`);
+      await loadUsers();
+    } catch (err) { alert(err.message); }
   });
   app.querySelector('.attribute-form').addEventListener('submit', async e => {
     e.preventDefault();

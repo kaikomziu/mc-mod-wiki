@@ -421,8 +421,8 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .as-account { padding: 8px 10px; border-radius: 6px; background: var(--accent-soft); font-size: 14px; }
 .user-link { text-decoration: none; font-weight: 500; }
 .user-link:hover { text-decoration: underline; }
-.attribute-form .input-with-btn { flex-wrap: wrap; }
-.attribute-form input { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; flex: 1 1 120px; }
+.attribute-form .input-with-btn, .grant-form .input-with-btn { flex-wrap: wrap; }
+.attribute-form input, .grant-form input { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; flex: 1 1 120px; }
 
 /* プロフィール */
 .profile-head { display: grid; grid-template-columns: auto 1fr auto; gap: 16px 20px; align-items: start; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin-bottom: 8px; box-shadow: var(--shadow); }
@@ -474,3 +474,18 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .crop-zoom { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 300px; }
 .crop-zoom input { flex: 1; accent-color: var(--accent); }
 .modal.cropper .btns { justify-content: center; justify-self: stretch; }
+
+/* 肩書き */
+.title-badge { display: inline-block; font-size: .78em; font-weight: 700; color: var(--dirt); white-space: nowrap; margin-left: 2px; letter-spacing: .02em; }
+.page-title .title-badge { font-family: "Noto Sans JP", sans-serif; font-size: .5em; vertical-align: middle; }
+.title-badge.locked { color: var(--muted); font-weight: 500; }
+.nav-titles .title-badge { color: inherit; opacity: .9; font-size: 11px; }
+.mini-avatar { width: 18px; height: 18px; border-radius: 5px; object-fit: cover; display: inline-grid; place-items: center; vertical-align: -4px; font-size: 11px; font-weight: 700; }
+.title-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.title-chip { font-weight: 700; color: var(--dirt); }
+.title-chip.on { color: var(--accent-ink); }
+.titles-panel .btns { justify-content: flex-end; align-items: center; }
+.title-count { margin-right: auto; }
+.locked-titles { margin-bottom: 10px; }
+.locked-titles ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+@media (max-width: 760px) { .nav-titles { display: none; } }
