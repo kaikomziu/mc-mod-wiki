@@ -530,3 +530,6 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .comment-guest input { max-width: 200px; }
 .comment-form .btns { justify-content: flex-end; align-items: center; }
 .comment-form .comment-len { margin-right: auto; }
+.comment-setting { display: block; margin: 4px 0 8px; }
+.comment-setting small { display: block; margin-left: 24px; }
+.comment-login { margin-top: 8px; }

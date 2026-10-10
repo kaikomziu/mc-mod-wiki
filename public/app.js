@@ -757,9 +757,9 @@ function bindComments(col, slug) {
     }));
   };
   api(base).then(items => { if (app.contains(box)) draw(items); }).catch(() => { listEl.innerHTML = '<li class="muted small">コメントを読み込めませんでした。</li>'; });
+  box.querySelector('[data-comment-login]')?.addEventListener('click', () => openAuth('login'));
   const form = box.querySelector('.comment-form');
   if (!form) return;
-  box.querySelector('[data-comment-login]')?.addEventListener('click', () => openAuth('login'));
   const len = box.querySelector('.comment-len');
   form.text.addEventListener('input', () => { len.textContent = `${form.text.value.length} / 1000`; });
   form.addEventListener('submit', async e => {
@@ -924,7 +924,9 @@ async function renderView(col, slug) {
     <section class="comments" id="comments">
       <h2 class="section-title">💬 コメント <small class="comment-count"></small></h2>
       <ul class="comment-list"><li class="muted small">読み込み中…</li></ul>
-      ${state.editLocked && !state.admin ? '<p class="muted small">現在、コメントの受付を停止しています。</p>' : `
+      ${m.commentsAccountOnly ? '<p class="muted small">🔒 このページは、アカウントを持っている人だけコメントできます。</p>' : ''}
+      ${state.editLocked && !state.admin ? '<p class="muted small">現在、コメントの受付を停止しています。</p>'
+        : m.commentsAccountOnly && !state.account && !state.admin ? '<div class="comment-login"><button type="button" class="btn primary" data-comment-login>ログイン / アカウント作成してコメントする</button></div>' : `
       <form class="comment-form">
         ${state.account ? '' : `<div class="comment-guest"><input name="user" maxlength="24" placeholder="名前" value="${esc(getUser() || '')}" required><span class="muted small">・<button type="button" class="linkish" data-comment-login>ログイン</button>すると名前の横にアイコンと肩書きが出ます</span></div>`}
         <textarea name="text" rows="3" maxlength="1000" required placeholder="感想・質問・補足などをどうぞ（1000文字まで）"></textarea>
@@ -1106,6 +1108,12 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
           <label class="field"><span>編集内容の要約</span><input name="comment" maxlength="120" value="${esc(src.comment ?? (revertFrom ? `版 ${revertFrom} に差し戻し` : ''))}" placeholder="例: 導入方法を追記"></label>
           <input name="website" class="hp" tabindex="-1" aria-hidden="true">
         </div>
+        ${(() => {
+          const canSet = isNew || state.admin || (!!state.account && state.account.uid === cur?.createdUid);
+          const on = src.commentsAccountOnly ?? cur?.commentsAccountOnly;
+          return `<label class="check comment-setting${canSet ? '' : ' muted'}"><input type="checkbox" name="commentsAccountOnly"${on ? ' checked' : ''}${canSet ? '' : ' disabled'}> 💬 コメントはアカウントを持っている人だけにする
+            <small class="muted">${canSet ? '（あとから変えられるのは、このページを作った人と管理者だけです）' : '（このページを作った人と管理者だけが変えられます）'}</small></label>`;
+        })()}
         <div class="form-error" role="alert"></div>
         <div class="save-row">
           <span class="draft-status muted small">下書きはこのブラウザに保存されます（30秒ごとに自動保存）</span>
@@ -1139,6 +1147,7 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
       link: form.link?.value || '', image: form.image.value, body: ta.value, comment: form.comment.value,
       versions: picked('versions'), loaders: picked('loaders'), tags: picked('tags'),
       downloads: Number(form.downloads.value) || 0, downloadsAt: form.downloadsAt.value,
+      commentsAccountOnly: form.commentsAccountOnly.checked,
     };
   };
   const saveDraft = (auto = false) => {
@@ -1339,6 +1348,7 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
       image: form.image.value, body: ta.value, versions: picked('versions'), loaders: picked('loaders'), tags: picked('tags'),
       downloads: Number(form.downloads.value) || 0, downloadsAt: form.downloadsAt.value,
       user: form.user.value, comment: form.comment.value, website: form.website.value, baseRev: rev,
+      ...(form.commentsAccountOnly.disabled ? {} : { commentsAccountOnly: form.commentsAccountOnly.checked }),
     };
     if (!state.account) setUser(payload.user.trim());
     const btn = form.querySelector('[type=submit]');
