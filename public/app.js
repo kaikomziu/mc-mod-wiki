@@ -250,6 +250,11 @@ async function renderUser(name) {
       <div class="profile-main">
         <h1 class="page-title">${esc(p.name)}</h1>
         <p class="muted small">${fmt(p.createdAt)} から参加 ・ 編集 ${p.editCount} 回 ・ MODページ ${nMods} ・ 記事 ${nArticles}</p>
+        <div class="profile-stats">
+          <button type="button" class="stat-link" data-list="following"><b>${p.following}</b> フォロー</button>
+          <button type="button" class="stat-link" data-list="followers"><b class="followers-count">${p.followers}</b> フォロワー</button>
+          <span class="stat"><b>${p.likesReceived}</b> もらったいいね</span>
+        </div>
         <div class="profile-bio">
           <div class="bio-view md">${p.bio ? renderMarkdown(p.bio) : `<p class="muted">${me ? 'まだ自己紹介がありません。「自己紹介を編集」から書けます。' : 'まだ自己紹介はありません。'}</p>`}</div>
           ${me ? `<form class="bio-form" hidden>
@@ -258,7 +263,8 @@ async function renderUser(name) {
           </form>` : ''}
         </div>
       </div>
-      ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>` : ''}
+      ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>`
+        : `<div class="btns profile-actions"><button class="btn follow-btn${p.isFollowing ? '' : ' primary'}" data-follow>${p.isFollowing ? '✓ フォロー中' : '＋ フォローする'}</button></div>`}
     </section>
     <section class="profile-section">
       <h2 class="section-title">🧱 作ったMODページ <small class="muted">${nMods}件</small></h2>
@@ -268,10 +274,46 @@ async function renderUser(name) {
       <h2 class="section-title">📝 書いた記事 <small class="muted">${nArticles}件</small></h2>
       ${cardsFor('articles')}
     </section>
+    <section class="profile-section">
+      <h2 class="section-title">♥ いいねしたページ <small class="muted">${p.liked.length}件</small></h2>
+      ${p.liked.length ? `<div class="grid">${p.liked.map(l => {
+        const full = listOf(l.col).find(x => x.slug === l.slug);
+        return full ? card(full, l.col) : `<a class="card" href="${KINDS[l.col].view(l.slug)}"><h3>${esc(l.name)}</h3></a>`;
+      }).join('')}</div>` : '<p class="muted">まだありません。</p>'}
+    </section>
     <section class="panel profile-section">
       <h2>最近の編集 <small>${p.editCount}件</small></h2>
       ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
     </section>`;
+  // フォローする／やめる
+  app.querySelector('[data-follow]')?.addEventListener('click', async e => {
+    if (!state.account) { openAuth('login'); toast('フォローするにはログインしてください'); return; }
+    const btn = e.currentTarget;
+    const on = !btn.textContent.includes('フォロー中');
+    btn.disabled = true;
+    try {
+      const r = await api(`/users/${encodeURIComponent(p.name)}/follow`, { method: 'POST', body: JSON.stringify({ follow: on }) });
+      btn.textContent = r.following ? '✓ フォロー中' : '＋ フォローする';
+      btn.classList.toggle('primary', !r.following);
+      app.querySelector('.followers-count').textContent = r.followers;
+      const f = new Set(state.account.following || []);
+      r.following ? f.add(p.uid) : f.delete(p.uid);
+      state.account.following = [...f];
+    } catch (err) { alert(err.message); }
+    btn.disabled = false;
+  });
+  // フォロー・フォロワーの一覧
+  app.querySelectorAll('[data-list]').forEach(b => b.addEventListener('click', async () => {
+    const kind = b.dataset.list;
+    let list;
+    try { list = await api(`/users/${encodeURIComponent(p.name)}/${kind}`); } catch (err) { alert(err.message); return; }
+    const form = openModal(`${esc(p.name)} さんの${kind === 'followers' ? 'フォロワー' : 'フォロー'}`,
+      list.length ? `<ul class="people-list">${list.map(a => `<li><a href="${userHref(a.name)}">${avatarHtml(a, 'list-avatar')} ${esc(a.name)}</a></li>`).join('')}</ul>`
+        : '<p class="muted">まだいません。</p>', () => true, { submitLabel: '閉じる' });
+    form.querySelector('[data-close]').hidden = true;
+    form.querySelectorAll('.people-list a').forEach(a => a.addEventListener('click', () => form.closest('.modal-bg').remove()));
+  }));
+
   // アイコンの変更・取り外し
   const saveAvatar = async avatar => {
     const res = await api('/account/profile', { method: 'POST', body: JSON.stringify({ avatar }) });
@@ -439,6 +481,7 @@ function renderHome(preset = null) {
         <div class="section-head"><h2>📝 まとめ記事</h2><a href="${u('/articles')}">すべて見る →</a></div>
         <div class="grid">${latestArticles.map(a => card(a, 'articles')).join('')}</div>
       </section>` : ''}
+    ${!preset && state.account?.following?.length ? '<section class="follow-feed" hidden><div class="section-head"><h2>👥 フォロー中の人の新着</h2></div><ul class="recent"></ul></section>' : ''}
     ${preset ? '' : '<h2 class="section-title">MOD一覧</h2>'}
     <div class="search-row">
       <input class="search" type="search" placeholder="MOD名・説明で絞り込み…" value="${esc(state.q)}">
@@ -470,6 +513,22 @@ function renderHome(preset = null) {
     updateList();
   }));
   updateList();
+  loadFollowFeed();
+}
+
+async function loadFollowFeed() {
+  const box = app.querySelector('.follow-feed');
+  if (!box) return;
+  let recent;
+  try { recent = await api('/recent'); } catch { return; }
+  const following = new Set(state.account.following);
+  const items = recent.filter(r => !r.action && r.uid && following.has(r.uid)).slice(0, 8);
+  if (!items.length || !app.contains(box)) return;
+  box.querySelector('ul').innerHTML = items.map(r => `
+    <li><span class="nowrap muted">${fmt(r.at)}</span>
+      <a href="${KINDS[r.col || 'pages'].view(r.slug)}"><strong>${esc(r.name)}</strong></a>${r.col === 'articles' ? ' <span class="badge">記事</span>' : ''}
+      ${r.isNew ? '<span class="badge new">新規</span>' : ''} ・ ${userLabel(r)}${r.comment ? ` <span class="muted">「${esc(r.comment)}」</span>` : ''}</li>`).join('');
+  box.hidden = false;
 }
 
 function updateList() {
@@ -608,6 +667,7 @@ async function renderView(col, slug) {
         ${state.admin ? `
           <button class="btn" data-lock>${m.locked ? '🔓 ロック解除' : '🔒 ロック'}</button>
           <button class="btn danger" data-delete>🗑 削除</button>` : ''}
+        <button class="btn like-btn${m.liked ? ' on' : ''}" data-like aria-pressed="${!!m.liked}">${m.liked ? '♥' : '♡'} いいね <b>${m.likes || 0}</b></button>
         <a class="btn" href="${K.hist(m.slug)}">🕘 履歴</a>
         ${canEdit(m) ? `<a class="btn primary" href="${K.edit(m.slug)}">✏️ 編集</a>` : `<span class="btn" aria-disabled="true">🔒 ${m.locked ? 'ロック中' : '編集停止中'}</span>`}
       </div>
@@ -620,6 +680,21 @@ async function renderView(col, slug) {
     </div>`;
   bindPageView();
   app.querySelector('[data-report]').addEventListener('click', () => openReport(col, m.slug, m.name));
+  app.querySelector('[data-like]').addEventListener('click', async e => {
+    if (!state.account) { openAuth('login'); toast('いいねするにはログインしてください'); return; }
+    const btn = e.currentTarget;
+    const on = !btn.classList.contains('on');
+    btn.disabled = true;
+    try {
+      const r = await api(`/${col}/${encodeURIComponent(m.slug)}/like`, { method: 'POST', body: JSON.stringify({ like: on }) });
+      btn.classList.toggle('on', r.liked);
+      btn.setAttribute('aria-pressed', r.liked);
+      btn.innerHTML = `${r.liked ? '♥' : '♡'} いいね <b>${r.likes}</b>`;
+      const item = listOf(col).find(x => x.slug === m.slug);
+      if (item) item.likes = r.likes;
+    } catch (err) { alert(err.message); }
+    btn.disabled = false;
+  });
   app.querySelector('[data-lock]')?.addEventListener('click', () =>
     adminAction(`/${col}/${s}/lock`, 'POST', { locked: !m.locked }, m.locked ? 'ロックを解除しました' : 'ロックしました'));
   app.querySelector('[data-delete]')?.addEventListener('click', () => {

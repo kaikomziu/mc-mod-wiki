@@ -34,7 +34,7 @@ export function card(m, col = 'pages') {
       <h3>${m.locked ? '<span title="ロック中">🔒</span> ' : ''}${isArticle ? '📝 ' : ''}${esc(m.name)}</h3>
       <p>${inline(m.summary)}</p>
       <div class="tags">${tagSpans(m.versions, 'ver')}${tagSpans(m.loaders, 'loader')}${tagSpans(m.tags)}</div>
-      <div class="card-meta">${fmt(m.updatedAt)} ・ ${esc(m.updatedBy)}${m.downloads ? ` ・ ⬇ ${formatDownloads(m.downloads)}` : ''}</div>
+      <div class="card-meta">${fmt(m.updatedAt)} ・ ${esc(m.updatedBy)}${m.downloads ? ` ・ ⬇ ${formatDownloads(m.downloads)}` : ''}${m.likes ? ` <span class="card-likes">♥ ${m.likes}</span>` : ''}</div>
     </a>`;
 }
 export const modCard = m => card(m, 'pages');

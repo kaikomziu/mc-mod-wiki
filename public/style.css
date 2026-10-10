@@ -446,3 +446,21 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
   .profile-actions { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
   .profile-avatar { width: 64px; height: 64px; font-size: 28px; }
 }
+
+/* いいね・フォロー */
+.like-btn { color: var(--danger); }
+.like-btn b { color: var(--text); font-variant-numeric: tabular-nums; }
+.like-btn.on { background: #fde4e8; border-color: #e7849a; }
+:root[data-theme="dark"] .like-btn.on { background: #3e1f26; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .like-btn.on { background: #3e1f26; } }
+.card-likes { color: var(--danger); margin-left: 4px; white-space: nowrap; }
+.profile-stats { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0 2px; font-size: 14px; }
+.stat-link { font: inherit; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; }
+.stat-link:hover { color: var(--link); text-decoration: underline; }
+.stat { color: var(--muted); }
+.profile-stats b { color: var(--text); font-size: 16px; margin-right: 2px; }
+.people-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 50vh; overflow-y: auto; }
+.people-list a { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 6px 8px; border-radius: 6px; color: var(--text); }
+.people-list a:hover { background: var(--surface-2); }
+.list-avatar { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; display: inline-grid; place-items: center; font-weight: 700; }
+.follow-feed { margin-bottom: 8px; }
