@@ -1608,6 +1608,14 @@ async function renderAdmin() {
           <button class="linkish" data-news-edit="${n.id}">編集</button><button class="linkish danger-text" data-news-del="${n.id}">削除</button></li>`).join('')}</ul>`
         : '<p class="muted">まだありません。</p>'}
     </section>
+    <section class="panel users-panel">
+      <h2>👥 ユーザー一覧 <small class="users-count">読み込み中…</small></h2>
+      <input class="users-filter" type="search" placeholder="名前・メールアドレス・肩書きで絞り込み">
+      <div class="table-wrap"><table class="users-table">
+        <thead><tr><th>ユーザー</th><th>メールアドレス</th><th>作成</th><th>編集</th><th>登録日</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
     <section class="panel contacts-panel">
       <h2>📮 お問い合わせ <small>未対応 ${s.contacts.filter(c => !c.done).length}件 / 全${s.contacts.length}件</small></h2>
       ${s.contacts.length ? `<ul class="reports">${s.contacts.map(c => `
@@ -1728,6 +1736,32 @@ async function renderAdmin() {
     adminAction('/admin/unban', 'POST', { ipHash: b.dataset.unban }, 'ブロックを解除しました')));
   app.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', () =>
     adminAction(`/${b.dataset.restore}/restore`, 'POST', null, '復元しました')));
+  // ユーザー一覧（あとから読み込む）
+  api('/admin/users').then(users => {
+    const panel = app.querySelector('.users-panel');
+    if (!panel) return;
+    const tbody = panel.querySelector('tbody');
+    const draw = q => {
+      const w = q.trim().toLowerCase();
+      const list = w ? users.filter(a => [a.name, a.email, ...a.titles].some(v => (v || '').toLowerCase().includes(w))) : users;
+      panel.querySelector('.users-count').textContent = w ? `${list.length} / ${users.length}人` : `${users.length}人`;
+      tbody.innerHTML = list.map(a => `<tr>
+        <td><a class="user-link" href="${userHref(a.name)}">${avatarHtml(a, 'mini-avatar')} ${esc(a.name)}</a>${titleBadges(a.titles)}${a.bio ? `<div class="muted small">${esc(a.bio)}</div>` : ''}</td>
+        <td>${a.email ? esc(a.email) : '<span class="muted">なし</span>'}</td>
+        <td>${a.created}</td><td>${a.edits}</td>
+        <td class="small">${a.createdAt ? fmt(a.createdAt).split(' ')[0] : ''}</td>
+        <td><button type="button" class="linkish small" data-grant-to="${esc(a.name)}">肩書きを贈る</button></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">見つかりません</td></tr>';
+      tbody.querySelectorAll('[data-grant-to]').forEach(b => b.addEventListener('click', () => {
+        const gf = app.querySelector('.grant-form');
+        gf.account.value = b.dataset.grantTo;
+        gf.scrollIntoView({ block: 'center' });
+        gf.title.focus();
+      }));
+    };
+    draw('');
+    panel.querySelector('.users-filter').addEventListener('input', e => draw(e.target.value));
+  }).catch(err => { const c = app.querySelector('.users-count'); if (c) c.textContent = `読み込めませんでした（${err.message}）`; });
   app.querySelectorAll('[data-contact-done]').forEach(b => b.addEventListener('click', () =>
     adminAction('/admin/contact', 'POST', { id: b.dataset.contactDone, done: !!b.dataset.done }, b.dataset.done ? '対応済みにしました' : '未対応に戻しました')));
   app.querySelectorAll('[data-contact-del]').forEach(b => b.addEventListener('click', () => {

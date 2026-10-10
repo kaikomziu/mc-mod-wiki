@@ -541,3 +541,9 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .contact-message { white-space: normal; overflow-wrap: anywhere; margin: 6px 0; }
 .contacts-panel li.done { opacity: .6; }
 .footer-contact { margin: 12px 0 0; font-size: 14px; }
+
+/* 管理：ユーザー一覧 */
+.users-filter { font: inherit; font-size: 15px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); width: 100%; max-width: 360px; margin-bottom: 10px; }
+.users-table td { vertical-align: top; }
+.users-table td:nth-child(3), .users-table td:nth-child(4) { text-align: right; }
+.users-panel .table-wrap { max-height: 520px; overflow: auto; }
