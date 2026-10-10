@@ -11,7 +11,7 @@ import {
 const app = document.getElementById('app');
 const state = {
   mods: [], articles: [], q: '', version: '', loader: '', tags: [],
-  dirty: false, admin: false, editLocked: false, openReports: 0, account: null, users: new Map(),
+  dirty: false, admin: false, editLocked: false, openReports: 0, account: null, users: new Map(), news: [],
 };
 const USER_KEY = 'modwiki-user';
 const TOKEN_KEY = 'modwiki-admin';
@@ -82,7 +82,11 @@ async function api(path, opts = {}) {
   return data;
 }
 const loadUsers = async () => { state.users = new Map((await api('/users').catch(() => [])).map(a => [a.uid, a])); };
-const loadData = async () => { [state.mods, state.articles] = await Promise.all([api('/pages'), api('/articles'), loadUsers()]); };
+const loadNews = async () => { state.news = await api('/news').catch(() => []); };
+const loadData = async () => { [state.mods, state.articles] = await Promise.all([api('/pages'), api('/articles'), loadUsers(), loadNews()]); };
+// お知らせは固定したものを先に、あとは新しい順
+const sortedNews = () => [...state.news].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.at.localeCompare(a.at));
+const newsDate = n => fmt(n.at).split(' ')[0];
 const listOf = col => (col === 'articles' ? state.articles : state.mods);
 const delta = d => `<span class="delta ${d > 0 ? 'plus' : d < 0 ? 'minus' : ''}">${d > 0 ? '+' : ''}${d}</span>`;
 const getUser = () => store.get(USER_KEY);
@@ -629,6 +633,12 @@ function renderHome(preset = null) {
       <div><h1 class="page-title">${esc(heading)}</h1><p class="lead">${esc(lead)}</p></div>
       ${canEdit() ? `<a class="btn primary" href="${u('/new')}">＋ MODページを作る</a>` : ''}
     </div>` : homeIntro({ mods: state.mods, articles: state.articles, canEdit: canEdit() })}
+    ${!preset && state.news.length ? `
+      <section class="home-news">
+        <div class="section-head"><h2>📢 お知らせ</h2><a href="${u('/news')}">すべて見る →</a></div>
+        <ul class="news-list">${sortedNews().slice(0, 3).map(n => `
+          <li><span class="news-date">${newsDate(n)}</span>${n.pinned ? '<span class="badge warn">📌 固定</span>' : ''}<a href="${u('/news')}#n-${n.id}">${esc(n.title)}</a></li>`).join('')}</ul>
+      </section>` : ''}
     ${!preset && latestArticles.length ? `
       <section class="home-articles">
         <div class="section-head"><h2>📝 まとめ記事</h2><a href="${u('/articles')}">すべて見る →</a></div>
@@ -707,6 +717,23 @@ function renderArticles() {
     </div>
     <div class="count">${list.length} 件</div>
     <div class="grid">${list.map(a => card(a, 'articles')).join('') || '<div class="empty">まだ記事がありません。最初の記事を書いてみませんか？</div>'}</div>`;
+}
+
+/* ===== お知らせ ===== */
+async function renderNews() {
+  setMeta(pageTitle('お知らせ'), 'Minecraft MOD Wiki からのお知らせ');
+  await loadNews();
+  const list = sortedNews();
+  app.innerHTML = `
+    <h1 class="page-title">📢 お知らせ</h1>
+    ${list.length ? list.map(n => `
+      <article class="panel news-item" id="n-${n.id}">
+        <div class="news-meta"><span class="news-date">${newsDate(n)}</span>${n.pinned ? '<span class="badge warn">📌 固定</span>' : ''}${n.updatedAt ? `<span class="muted small">（${fmt(n.updatedAt)} 更新）</span>` : ''}</div>
+        <h2>${esc(n.title)}</h2>
+        ${n.body ? `<div class="md">${renderMarkdown(n.body)}</div>` : ''}
+      </article>`).join('') : '<div class="empty">お知らせはまだありません。</div>'}`;
+  const target = location.hash && document.getElementById(location.hash.slice(1));
+  if (target) target.scrollIntoView();
 }
 
 /* ===== 検索 ===== */
@@ -1434,7 +1461,8 @@ async function renderAdmin() {
   if (!state.admin) { app.innerHTML = '<div class="empty">管理者のみ表示できます。</div>'; return; }
   loading();
   let s;
-  try { s = await api('/admin/state'); } catch (e) { app.innerHTML = errorBox(e); return; }
+  try { [s] = await Promise.all([api('/admin/state'), loadNews()]); } catch (e) { app.innerHTML = errorBox(e); return; }
+  s.news = state.news;
   setMeta(pageTitle('管理'));
   const bans = Object.entries(s.bans);
   const link = p => `<a href="${KINDS[p.col || 'pages'].view(p.slug)}">${esc(p.name)}</a>${p.col === 'articles' ? ' <span class="badge">記事</span>' : ''}`;
@@ -1451,6 +1479,19 @@ async function renderAdmin() {
           ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
           <div class="btns"><a class="btn" href="${KINDS[r.col].hist(r.slug)}">履歴を見る</a><button class="btn" data-resolve="${r.id}">✓ 対応済みにする</button>${r.ipHash ? `<button class="btn danger" data-ban="${r.ipHash}" data-user="${esc(r.user || '通報者')}">通報者をブロック</button>` : ''}</div>
         </li>`).join('')}</ul>` : '<p class="muted">未対応の通報はありません。</p>'}
+    </section>
+    <section class="panel news-admin">
+      <h2>📢 お知らせ <small>トップページと「お知らせ」ページに表示されます（Markdown が使えます）</small></h2>
+      <form class="news-form">
+        <input type="hidden" name="newsId">
+        <label class="field"><span>タイトル</span><input name="title" maxlength="100" required placeholder="例: 新しい機能を追加しました"></label>
+        <label class="field"><span>本文 <small>任意・5000文字まで</small></span><textarea name="body" rows="5" maxlength="5000"></textarea></label>
+        <div class="btns"><label class="check"><input type="checkbox" name="pinned"> 📌 上に固定する</label><button type="button" class="btn" data-news-cancel hidden>やめる</button><button class="btn primary" data-news-submit>投稿する</button></div>
+      </form>
+      ${s.news.length ? `<ul class="news-admin-list">${s.news.map(n => `
+        <li><span class="news-date">${newsDate(n)}</span>${n.pinned ? '<span class="badge warn">📌</span>' : ''}<strong>${esc(n.title)}</strong>
+          <button class="linkish" data-news-edit="${n.id}">編集</button><button class="linkish danger-text" data-news-del="${n.id}">削除</button></li>`).join('')}</ul>`
+        : '<p class="muted">まだありません。</p>'}
     </section>
     <div class="admin-grid">
       <section class="panel">
@@ -1502,6 +1543,34 @@ async function renderAdmin() {
     toast('ログアウトしました');
     navigate('/');
   });
+  // お知らせの投稿・編集・削除
+  const nf = app.querySelector('.news-form');
+  const resetNews = () => { nf.reset(); nf.newsId.value = ''; nf.querySelector('[data-news-submit]').textContent = '投稿する'; nf.querySelector('[data-news-cancel]').hidden = true; };
+  nf.querySelector('[data-news-cancel]').addEventListener('click', resetNews);
+  nf.addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      await api('/admin/news', { method: 'POST', body: JSON.stringify({ id: nf.newsId.value, title: nf.elements.title.value, body: nf.body.value, pinned: nf.pinned.checked }) });
+      toast(nf.newsId.value ? 'お知らせを更新しました' : 'お知らせを投稿しました');
+      route();
+    } catch (err) { alert(err.message); }
+  });
+  app.querySelectorAll('[data-news-edit]').forEach(b => b.addEventListener('click', () => {
+    const n = s.news.find(x => x.id === b.dataset.newsEdit);
+    nf.newsId.value = n.id;
+    nf.elements.title.value = n.title;
+    nf.body.value = n.body || '';
+    nf.pinned.checked = !!n.pinned;
+    nf.querySelector('[data-news-submit]').textContent = '更新する';
+    nf.querySelector('[data-news-cancel]').hidden = false;
+    nf.scrollIntoView({ block: 'center' });
+    nf.elements.title.focus();
+  }));
+  app.querySelectorAll('[data-news-del]').forEach(b => b.addEventListener('click', async () => {
+    const n = s.news.find(x => x.id === b.dataset.newsDel);
+    if (!confirm(`お知らせ「${n.title}」を削除しますか？`)) return;
+    try { await api('/admin/news', { method: 'POST', body: JSON.stringify({ id: n.id, remove: true }) }); toast('削除しました'); route(); } catch (err) { alert(err.message); }
+  }));
   app.querySelector('.grant-form').addEventListener('submit', async e => {
     e.preventDefault();
     const f = e.target;
@@ -1649,6 +1718,7 @@ async function route() {
   else if (a === 'article' && b && c === 'history') await renderHistory('articles', b);
   else if (a === 'article' && b && !c) await renderView('articles', b);
   else if (a === 'search') await renderSearch();
+  else if (a === 'news') await renderNews();
   else if (a === 'recent') await renderRecent();
   else if (a === 'help') renderHelp();
   else if (a === 'admin') await renderAdmin();

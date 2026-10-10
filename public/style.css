@@ -495,3 +495,15 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .user-hit-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .user-hit { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); text-decoration: none; color: inherit; }
 .user-hit:hover { border-color: var(--accent); }
+
+/* お知らせ */
+.home-news { margin: 0 0 20px; }
+.news-list { list-style: none; padding: 0; margin: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.news-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.news-list li:first-child { border-top: 0; }
+.news-date { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.news-item h2 { margin: 6px 0 8px; font-size: 20px; }
+.news-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.news-admin-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.news-admin-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.news-form .check { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
