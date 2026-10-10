@@ -1,0 +1,9 @@
+{
+  "name": "minecraft-mod-wiki",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node serve.js",
+    "build": "node tools/build.js"
+  }
+}

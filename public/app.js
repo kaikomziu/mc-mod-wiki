@@ -1,0 +1,1236 @@
+import { VERSIONS, LOADERS, TAGS } from './tags.js';
+import { config, u, appPath } from './paths.js';
+import { esc, inline, renderMarkdown, setModResolver } from './markdown.js';
+import { fmt, KINDS, card, pageView, formatDownloads, homeIntro } from './views.js';
+import {
+  homeTitle, pageTitle, modTitle, listTitle, modDescription, listDescription, articleTitle, articleDescription,
+  SITE_DESC, LISTS, ARTICLES_TITLE, ARTICLES_DESC,
+} from './seo.js';
+
+const app = document.getElementById('app');
+const state = {
+  mods: [], articles: [], q: '', version: '', loader: '', tags: [],
+  dirty: false, admin: false, editLocked: false, openReports: 0,
+};
+const USER_KEY = 'modwiki-user';
+const TOKEN_KEY = 'modwiki-admin';
+const store = {
+  get: k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
+  set: (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* 保存できなくても続行 */ } },
+};
+
+// 下書き（このブラウザの中だけに保存）。{ id: { col, slug, isNew, data, baseRev, savedAt } }
+const DRAFTS_KEY = 'modwiki-drafts';
+const drafts = {
+  all() { try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '{}'); } catch { return {}; } },
+  get(id) { return this.all()[id] || null; },
+  put(id, d) {
+    const a = this.all();
+    a[id] = d;
+    try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(a)); } catch { return false; }
+    updateDraftLink();
+    return true;
+  },
+  remove(id) {
+    const a = this.all();
+    delete a[id];
+    try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(a)); } catch { /* 消せなくても続行 */ }
+    updateDraftLink();
+  },
+};
+const draftHref = (id, d) => `${d.isNew ? KINDS[d.col].newPath : KINDS[d.col].edit(d.slug)}?draft=${encodeURIComponent(id)}`;
+
+function updateDraftLink() {
+  const n = Object.keys(drafts.all()).length;
+  document.getElementById('drafts-link')?.remove();
+  if (n) document.querySelector('.site-header nav')?.insertAdjacentHTML('beforeend', `<a id="drafts-link" href="${u('/drafts')}">📄 下書き<span class="nav-badge muted-badge">${n}</span></a>`);
+}
+
+setModResolver(key => {
+  const k = key.toLowerCase();
+  return state.mods.find(m => m.slug === k) || state.mods.find(m => m.name.toLowerCase() === k);
+});
+
+/* ===== 共通 ===== */
+const authHeaders = () => (store.get(TOKEN_KEY) ? { 'x-admin-token': store.get(TOKEN_KEY) } : {});
+async function api(path, opts = {}) {
+  const r = await fetch(config.api + path, { cache: 'no-store', ...opts, headers: { 'content-type': 'application/json', ...authHeaders(), ...opts.headers } });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data.error || `エラー (${r.status})`), { status: r.status, data });
+  return data;
+}
+const loadData = async () => { [state.mods, state.articles] = await Promise.all([api('/pages'), api('/articles')]); };
+const listOf = col => (col === 'articles' ? state.articles : state.mods);
+const delta = d => `<span class="delta ${d > 0 ? 'plus' : d < 0 ? 'minus' : ''}">${d > 0 ? '+' : ''}${d}</span>`;
+const getUser = () => store.get(USER_KEY);
+const setUser = v => store.set(USER_KEY, v);
+const canEdit = page => state.admin || (!state.editLocked && !page?.locked);
+const crown = e => (e.admin ? ' <span class="badge admin" title="管理者による操作">👑 管理者</span>' : '');
+const banBtn = e => (state.admin && e.ipHash
+  ? ` <button type="button" class="linkish ban" data-ban="${e.ipHash}" data-user="${esc(e.user || '')}">🚫 ブロック</button>` : '');
+const loading = () => { if (!firstRender) app.innerHTML = '<div class="loading">読み込み中…</div>'; };
+const errorBox = e => `<div class="empty">${esc(e.message)}</div>`;
+const crumbRoot = col => `<a href="${KINDS[col].listPath}">${KINDS[col].listLabel}</a>`;
+
+function bindBanButtons() {
+  app.querySelectorAll('[data-ban]').forEach(b => b.addEventListener('click', async () => {
+    const reason = prompt(`「${b.dataset.user}」の編集をブロックします。理由（任意）:`, '');
+    if (reason === null) return;
+    try {
+      await api('/admin/ban', { method: 'POST', body: JSON.stringify({ ipHash: b.dataset.ban, user: b.dataset.user, reason }) });
+      toast(`${b.dataset.user} をブロックしました`);
+    } catch (e) { alert(e.message); }
+  }));
+}
+
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.append(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+function setMeta(title, desc = SITE_DESC) {
+  document.title = title;
+  document.querySelector('meta[name="description"]')?.setAttribute('content', desc);
+  document.querySelector('link[rel="canonical"]')?.setAttribute('href', location.origin + location.pathname);
+}
+
+// 小さなダイアログ。html はフォームの中身、onSubmit が true 以外を返すと開いたまま
+function openModal(title, html, onSubmit, { submitLabel = 'OK', wide = false } = {}) {
+  document.querySelector('.modal-bg')?.remove();
+  const bg = document.createElement('div');
+  bg.className = 'modal-bg';
+  bg.innerHTML = `
+    <form class="modal${wide ? ' wide' : ''}" autocomplete="off">
+      <h2>${title}</h2>
+      ${html}
+      <div class="form-error" role="alert"></div>
+      <div class="btns"><button type="button" class="btn" data-close>キャンセル</button><button class="btn primary">${submitLabel}</button></div>
+    </form>`;
+  document.body.append(bg);
+  const form = bg.querySelector('form');
+  const close = () => bg.remove();
+  bg.addEventListener('click', e => { if (e.target === bg || e.target.matches('[data-close]')) close(); });
+  bg.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = form.querySelector('.btn.primary');
+    btn.disabled = true;
+    try {
+      if ((await onSubmit(form)) !== false) close();
+    } catch (err) {
+      form.querySelector('.form-error').textContent = err.message;
+    } finally { btn.disabled = false; }
+  });
+  form.querySelector('input:not([type=hidden]):not([type=checkbox]), select, textarea')?.focus();
+  return form;
+}
+
+async function refreshSettings() {
+  try {
+    const s = await api('/settings');
+    Object.assign(state, { editLocked: s.editLocked, admin: s.isAdmin, openReports: s.openReports || 0 });
+    if (!s.isAdmin) store.set(TOKEN_KEY, '');
+  } catch { /* 取得できなくても閲覧は続行 */ }
+  document.body.classList.toggle('is-admin', state.admin);
+  updateDraftLink();
+  document.getElementById('admin-link')?.remove();
+  if (state.admin) {
+    document.querySelector('.site-header nav').insertAdjacentHTML('beforeend',
+      `<a id="admin-link" href="${u('/admin')}">👑 管理${state.openReports ? `<span class="nav-badge" title="未対応の通報">${state.openReports}</span>` : ''}</a>`);
+  }
+  const banner = document.getElementById('site-banner');
+  banner.hidden = !state.editLocked;
+  banner.textContent = state.admin ? '⚠️ サイト全体の編集を停止中です（管理者は編集できます）' : '⚠️ 現在、編集は一時停止されています';
+}
+
+/* ===== 管理者ログイン（キーボードで admin と打つと開く） ===== */
+let typed = '';
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  typed = (typed + e.key.toLowerCase()).slice(-5);
+  if (typed !== 'admin') return;
+  e.preventDefault(); // 最後の「n」が入力欄に入らないように
+  typed = '';
+  if (state.admin) navigate('/admin');
+  else openLogin();
+});
+
+function openLogin() {
+  openModal('管理者ログイン',
+    ['ne', 'cl', 'ch'].map(n => `<label class="field inline"><span>${n[0].toUpperCase() + n[1]}</span><input name="${n}" type="password" required autocapitalize="off" autocorrect="off" spellcheck="false"></label>`).join(''),
+    async form => {
+      const { token } = await api('/admin/login', {
+        method: 'POST', body: JSON.stringify({ ne: form.ne.value, cl: form.cl.value, ch: form.ch.value }),
+      });
+      store.set(TOKEN_KEY, token);
+      await refreshSettings();
+      toast('👑 管理者としてログインしました');
+      if (!state.dirty) route();
+    }, { submitLabel: 'ログイン' });
+}
+
+/* ===== 通報 ===== */
+const REPORT_REASONS = ['荒らし・いたずら', '間違った情報', '不適切な内容（画像・言葉）', 'スパム・宣伝', 'その他'];
+
+function openReport(col, slug, name) {
+  openModal(`🚩「${esc(name)}」を通報`, `
+    <p class="muted small">管理者に知らせます。内容を確認して対応します。</p>
+    <label class="field"><span>理由 <b class="req">必須</b></span>
+      <select name="reason" required><option value="">選んでください</option>${REPORT_REASONS.map(r => `<option>${r}</option>`).join('')}</select></label>
+    <label class="field"><span>詳しく（任意）</span><textarea name="comment" rows="3" maxlength="500" placeholder="どの部分がおかしいか など"></textarea></label>
+    <label class="field"><span>名前（任意）</span><input name="user" maxlength="24" value="${esc(getUser())}"></label>
+    <input name="website" class="hp" tabindex="-1" aria-hidden="true">`,
+  async form => {
+    await api('/report', {
+      method: 'POST',
+      body: JSON.stringify({ col, slug, reason: form.reason.value, comment: form.comment.value, user: form.user.value, website: form.website.value }),
+    });
+    toast('🚩 通報しました。ありがとうございます');
+  }, { submitLabel: '通報する' });
+}
+
+/* ===== 画像アップロード ===== */
+async function compressImage(file) {
+  if (!/^image\//.test(file.type)) throw new Error('画像ファイルを選んでください。');
+  if (file.type === 'image/gif') {
+    if (file.size > 4.4e6) throw new Error(`GIFは4MBまでです（このファイルは${(file.size / 1e6).toFixed(1)}MB）。秒数を短くするか、サイズを小さくしてください。`);
+    return file;
+  }
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale);
+  canvas.height = Math.round(bmp.height * scale);
+  canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  for (const [type, q] of [['image/webp', 0.85], ['image/webp', 0.7], ['image/jpeg', 0.8]]) {
+    const blob = await new Promise(r => canvas.toBlob(r, type, q));
+    if (blob && blob.type === type && blob.size <= 3e6) return blob;
+  }
+  throw new Error('画像が大きすぎます。');
+}
+
+async function uploadImage(file) {
+  const blob = await compressImage(file);
+  const r = await fetch(`${config.api}/images?user=${encodeURIComponent(getUser())}`, {
+    method: 'POST', body: blob, headers: { 'content-type': blob.type, ...authHeaders() },
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'アップロードに失敗しました。');
+  return data.url;
+}
+
+function pickFile({ multiple = false } = {}) {
+  return new Promise(resolve => {
+    const input = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', multiple });
+    input.addEventListener('change', () => resolve(multiple ? [...input.files] : input.files[0] || null));
+    input.click();
+  });
+}
+
+/* ===== 一覧 ===== */
+// preset: /version/1.20.1 などの一覧ページ用 { kind, value }
+function renderHome(preset = null) {
+  Object.assign(state, { version: '', loader: '', tags: [] });
+  let heading = 'Minecraft MOD Wiki';
+  let lead = 'マイクラ（Minecraft）のMODを日本語で解説する、だれでも編集できるWikiです。';
+  if (preset) {
+    const def = LISTS[preset.kind];
+    if (preset.kind === 'tag') state.tags = [preset.value];
+    else state[preset.kind] = preset.value;
+    heading = def.label(preset.value);
+    lead = listDescription(preset.kind, preset.value, state.mods.filter(m => m[def.field].includes(preset.value)));
+    setMeta(listTitle(preset.kind, preset.value), lead);
+  } else {
+    setMeta(homeTitle());
+  }
+  const used = new Set(state.mods.flatMap(m => [...m.versions, ...m.loaders, ...m.tags]));
+  const opts = list => list.filter(v => used.has(v)); // 使われているタグだけ絞り込みに出す
+  const single = (key, values) =>
+    [`<button class="chip${!state[key] ? ' on' : ''}" data-k="${key}" data-v="">すべて</button>`]
+      .concat(values.map(v => `<button class="chip${state[key] === v ? ' on' : ''}" data-k="${key}" data-v="${esc(v)}">${esc(v)}</button>`)).join('');
+  const multi = TAGS.filter(t => used.has(t)).map(v => `<button class="chip${state.tags.includes(v) ? ' on' : ''}" data-tag="${esc(v)}">${esc(v)}</button>`).join('');
+  const latestArticles = [...state.articles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
+
+  app.innerHTML = `
+    ${preset ? `<div class="page-head">
+      <div><h1 class="page-title">${esc(heading)}</h1><p class="lead">${esc(lead)}</p></div>
+      ${canEdit() ? `<a class="btn primary" href="${u('/new')}">＋ MODページを作る</a>` : ''}
+    </div>` : homeIntro({ mods: state.mods, articles: state.articles, canEdit: canEdit() })}
+    ${!preset && latestArticles.length ? `
+      <section class="home-articles">
+        <div class="section-head"><h2>📝 まとめ記事</h2><a href="${u('/articles')}">すべて見る →</a></div>
+        <div class="grid">${latestArticles.map(a => card(a, 'articles')).join('')}</div>
+      </section>` : ''}
+    ${preset ? '' : '<h2 class="section-title">MOD一覧</h2>'}
+    <div class="search-row">
+      <input class="search" type="search" placeholder="MOD名・説明で絞り込み…" value="${esc(state.q)}">
+      <a class="btn" data-fulltext href="${u('/search')}">🔍 本文も検索</a>
+    </div>
+    <div class="filters">
+      <div class="filter-row"><span class="filter-label">バージョン</span>${single('version', opts(VERSIONS))}</div>
+      <div class="filter-row"><span class="filter-label">ローダー</span>${single('loader', opts(LOADERS))}</div>
+      <div class="filter-row"><span class="filter-label">タグ<small>（複数可）</small></span>${multi}</div>
+    </div>
+    <div class="count"></div>
+    <div class="grid mods-grid"></div>`;
+
+  const input = app.querySelector('.search');
+  const full = app.querySelector('[data-fulltext]');
+  const syncFull = () => full.setAttribute('href', `${u('/search')}${state.q ? `?q=${encodeURIComponent(state.q)}` : ''}`);
+  input.addEventListener('input', () => { state.q = input.value; syncFull(); updateList(); });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && state.q.trim()) navigate(`/search?q=${encodeURIComponent(state.q.trim())}`); });
+  syncFull();
+  app.querySelectorAll('.chip[data-k]').forEach(b => b.addEventListener('click', () => {
+    state[b.dataset.k] = b.dataset.v;
+    app.querySelectorAll(`.chip[data-k="${b.dataset.k}"]`).forEach(x => x.classList.toggle('on', x === b));
+    updateList();
+  }));
+  app.querySelectorAll('.chip[data-tag]').forEach(b => b.addEventListener('click', () => {
+    const t = b.dataset.tag;
+    state.tags = state.tags.includes(t) ? state.tags.filter(x => x !== t) : [...state.tags, t];
+    b.classList.toggle('on');
+    updateList();
+  }));
+  updateList();
+}
+
+function updateList() {
+  const q = state.q.trim().toLowerCase();
+  const list = state.mods.filter(m =>
+    (!q || (m.name + m.summary + m.author + m.tags.join()).toLowerCase().includes(q)) &&
+    (!state.version || m.versions.includes(state.version)) &&
+    (!state.loader || m.loaders.includes(state.loader)) &&
+    state.tags.every(t => m.tags.includes(t)));
+  list.sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+  app.querySelector('.count').textContent = `${list.length} 件`;
+  app.querySelector('.mods-grid').innerHTML = list.length ? list.map(m => card(m, 'pages')).join('')
+    : `<div class="empty">該当するMODがありません${q ? `<br><br><a class="btn" href="${u('/search')}?q=${encodeURIComponent(q)}">本文も含めて「${esc(q)}」を検索</a>` : ''}</div>`;
+}
+
+function renderArticles() {
+  setMeta(ARTICLES_TITLE, ARTICLES_DESC);
+  const list = [...state.articles].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  app.innerHTML = `
+    <div class="page-head">
+      <div><h1 class="page-title">まとめ記事</h1><p class="lead">${esc(ARTICLES_DESC)} だれでも自由に記事を書けます。</p></div>
+      ${canEdit() ? `<a class="btn primary" href="${u('/articles/new')}">＋ 記事を書く</a>` : ''}
+    </div>
+    <div class="count">${list.length} 件</div>
+    <div class="grid">${list.map(a => card(a, 'articles')).join('') || '<div class="empty">まだ記事がありません。最初の記事を書いてみませんか？</div>'}</div>`;
+}
+
+/* ===== 検索 ===== */
+async function renderSearch() {
+  const q = new URLSearchParams(location.search).get('q') || '';
+  setMeta(pageTitle(q ? `「${q}」の検索結果` : '検索'));
+  app.innerHTML = `
+    <h1 class="page-title">検索</h1>
+    <form class="search-page-form" role="search"><input class="search" name="q" type="search" value="${esc(q)}" placeholder="MOD名・アイテム名・エラー内容など" autofocus><button class="btn primary">検索</button></form>
+    <div class="search-results">${q ? '<div class="loading">検索中…</div>' : '<p class="muted">MODページとまとめ記事の本文から探します。スペースで区切ると、すべてを含むページを探します。<br>Wikiにまだ無いMODは、Modrinth・CurseForge からも探して表示します（英語名で探すとよく見つかります）。</p>'}</div>
+    <div class="external-results"></div>`;
+  if (q) renderExternal(q);
+  app.querySelector('form').addEventListener('submit', e => {
+    e.preventDefault();
+    const v = e.target.q.value.trim();
+    navigate(v ? `/search?q=${encodeURIComponent(v)}` : '/search');
+  });
+  if (!q) return;
+  let results;
+  try { results = await api(`/search?q=${encodeURIComponent(q)}`); } catch (e) { app.querySelector('.search-results').innerHTML = errorBox(e); return; }
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const mark = s => {
+    let h = esc(s);
+    for (const w of words) h = h.replace(new RegExp(esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), m => `<mark>${m}</mark>`);
+    return h;
+  };
+  app.querySelector('.search-results').innerHTML = results.length ? `
+    <p class="count">「${esc(q)}」の検索結果: ${results.length} 件</p>
+    <ol class="results">${results.map(r => `
+      <li>
+        <a href="${KINDS[r.col].view(r.slug)}"><strong>${mark(r.name)}</strong></a>
+        <span class="badge">${KINDS[r.col].label}</span>
+        ${r.summary ? `<div class="muted small">${mark(r.summary)}</div>` : ''}
+        <p>${mark(r.snippet)}</p>
+      </li>`).join('')}</ol>`
+    : `<div class="empty">「${esc(q)}」に一致するページはありませんでした。${canEdit() ? `<br><br><a class="btn" href="${u('/new')}">MODページを作る</a> <a class="btn" href="${u('/articles/new')}">記事を書く</a>` : ''}</div>`;
+}
+
+// Wikiにまだ無いMODを Modrinth / CurseForge から探して、ページ作成につなげる
+const TYPE_LABEL = { mod: 'MOD', modpack: 'MODパック', resourcepack: 'リソースパック', shader: 'シェーダー', datapack: 'データパック' };
+async function renderExternal(q) {
+  const box = app.querySelector('.external-results');
+  box.innerHTML = '<div class="loading small">Modrinth・CurseForge を検索中…</div>';
+  let res;
+  try { res = await api(`/external?q=${encodeURIComponent(q)}`); } catch { box.innerHTML = ''; return; }
+  if (!app.contains(box)) return; // 別のページに移動していたら何もしない
+  const known = new Set(state.mods.flatMap(m => [m.name.toLowerCase(), (m.link || '').replace(/\/+$/, '')]));
+  const item = r => {
+    const inWiki = known.has(r.name.toLowerCase()) || known.has(r.url.replace(/\/+$/, ''));
+    const wikiPage = inWiki && state.mods.find(m => m.name.toLowerCase() === r.name.toLowerCase() || (m.link || '').replace(/\/+$/, '') === r.url.replace(/\/+$/, ''));
+    return `
+      <li>
+        ${r.icon ? `<img class="ext-icon" src="${esc(r.icon)}" alt="" loading="lazy">` : '<span class="ext-icon"></span>'}
+        <div class="ext-main">
+          <a href="${esc(r.url)}" target="_blank" rel="noopener"><strong>${esc(r.name)}</strong></a>
+          <span class="badge">${TYPE_LABEL[r.type] || 'MOD'}</span>
+          <span class="muted small">${r.author ? `by ${esc(r.author)} ・ ` : ''}⬇ ${formatDownloads(r.downloads)}</span>
+          <div class="muted small">${esc(r.summary)}</div>
+        </div>
+        <div class="ext-act">${wikiPage ? `<a class="btn" href="${KINDS.pages.view(wikiPage.slug)}">Wikiで見る</a>`
+          : canEdit() ? `<a class="btn primary" href="${u('/new')}?from=${encodeURIComponent(r.url)}">＋ ページを作る</a>` : ''}</div>
+      </li>`;
+  };
+  const col = (title, list, note) => `
+    <div class="ext-col">
+      <h3>${title}</h3>
+      ${list.length ? `<ul class="ext-list">${list.map(item).join('')}</ul>` : `<p class="muted small">${note}</p>`}
+    </div>`;
+  box.innerHTML = `
+    <section class="external">
+      <h2>🌐 Wikiの外で見つかったもの</h2>
+      <p class="muted small">「＋ ページを作る」を押すと、MOD名・対応バージョンなどを読み込んだ状態で新しいページを作れます。</p>
+      <div class="ext-cols">
+        ${col('Modrinth', res.modrinth, '見つかりませんでした。英語名で探すと見つかりやすいです。')}
+        ${col('CurseForge', res.curseforge, !res.curseforgeEnabled ? 'CurseForge の検索は準備中です。' : res.curseforgeError === 'forbidden' ? 'CurseForge の検索は今は使えません。CurseForge のURLを編集画面の「🔍 情報を取得」に入れれば、そこから読み込めます。' : res.curseforgeError ? 'CurseForge に接続できませんでした。' : '見つかりませんでした。')}
+      </div>
+    </section>`;
+}
+
+/* ===== ページ表示（MOD / 記事） ===== */
+function bindPageView() {
+  app.querySelectorAll('[data-jump]').forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    document.getElementById(a.dataset.jump).scrollIntoView({ behavior: 'smooth' });
+  }));
+}
+
+async function renderView(col, slug) {
+  const K = KINDS[col];
+  loading();
+  let m;
+  try { m = await api(`/${col}/${encodeURIComponent(slug)}`); } catch (e) {
+    if (e.status !== 404) { app.innerHTML = errorBox(e); return; }
+    const del = e.data?.deleted;
+    setMeta(pageTitle('ページが見つかりません'));
+    app.innerHTML = `<div class="crumb">${crumbRoot(col)}</div>
+      <h1 class="page-title">${esc(slug)}</h1>
+      <div class="empty">${esc(e.message)}<br><br>${
+        del ? (state.admin ? '<button class="btn primary" data-restore>♻️ このページを復元する</button>' : '')
+          : canEdit() ? `<a class="btn primary" href="${K.newPath}/${encodeURIComponent(slug)}">このページを作成する</a>` : ''}</div>`;
+    app.querySelector('[data-restore]')?.addEventListener('click', () => adminAction(`/${col}/${encodeURIComponent(slug)}/restore`, 'POST', null, '復元しました'));
+    return;
+  }
+  if (col === 'pages') setMeta(modTitle(m), modDescription(m));
+  else setMeta(articleTitle(m), articleDescription(m));
+  const s = encodeURIComponent(m.slug);
+  app.innerHTML = `
+    <div class="page-tools">
+      <div class="crumb">${crumbRoot(col)} › ${esc(m.name)}</div>
+      <div class="btns">
+        ${state.admin ? `
+          <button class="btn" data-lock>${m.locked ? '🔓 ロック解除' : '🔒 ロック'}</button>
+          <button class="btn danger" data-delete>🗑 削除</button>` : ''}
+        <a class="btn" href="${K.hist(m.slug)}">🕘 履歴</a>
+        ${canEdit(m) ? `<a class="btn primary" href="${K.edit(m.slug)}">✏️ 編集</a>` : `<span class="btn" aria-disabled="true">🔒 ${m.locked ? 'ロック中' : '編集停止中'}</span>`}
+      </div>
+    </div>
+    ${m.locked ? `<div class="notice lock">🔒 このページはロックされています。${state.admin ? '（管理者は編集できます）' : '管理者のみ編集できます。'}</div>` : ''}
+    ${pageView(m, col)}
+    <div class="page-foot">
+      <span>最終更新: ${fmt(m.updatedAt)}（${esc(m.updatedBy)}）・ 作成: ${esc(m.createdBy)} ・ 版 ${m.rev}</span>
+      <button type="button" class="linkish report-link" data-report>🚩 このページを通報</button>
+    </div>`;
+  bindPageView();
+  app.querySelector('[data-report]').addEventListener('click', () => openReport(col, m.slug, m.name));
+  app.querySelector('[data-lock]')?.addEventListener('click', () =>
+    adminAction(`/${col}/${s}/lock`, 'POST', { locked: !m.locked }, m.locked ? 'ロックを解除しました' : 'ロックしました'));
+  app.querySelector('[data-delete]')?.addEventListener('click', () => {
+    if (confirm(`「${m.name}」を削除しますか？\n（管理画面からいつでも復元できます）`)) adminAction(`/${col}/${s}`, 'DELETE', null, '削除しました');
+  });
+}
+
+async function adminAction(path, method, body, msg) {
+  try {
+    await api(path, { method, body: body ? JSON.stringify(body) : undefined });
+    await Promise.all([loadData(), refreshSettings()]);
+    toast(msg);
+    route();
+  } catch (e) { alert(e.message); }
+}
+
+/* ===== 編集 ===== */
+const slugify = s => s.toLowerCase().normalize('NFKC').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50);
+
+const RECIPE_CRAFT = '\n```recipe\n素材 | 素材 | 素材\n     | 棒   |\n     | 棒   |\n=> 完成品 x1\n```\n';
+const RECIPE_SMELT = '\n```smelt\n素材\n=> 完成品\n```\n';
+
+// ページのひな形（見出しごと）。「📋 テンプレ」で足りない見出しだけ追加できる
+const TEMPLATES = {
+  pages: [
+    ['概要', '（どんなMODか、何ができるかを書く）'],
+    ['主な要素', '- '],
+    ['導入方法', '1. 対応するMinecraftのバージョンとMODローダー（Forge / NeoForge / Fabric）を用意する\n2. 前提MODがあれば先に入れる\n3. ダウンロードした .jar ファイルを mods フォルダに入れる\n4. ゲームを起動し、タイトル画面の「Mods」に表示されれば成功'],
+    ['前提MOD', '- なし'],
+    ['序盤の進め方', '1. '],
+    ['レシピ', RECIPE_CRAFT.trim()],
+    ['よくあるエラー・注意点', '> [!WARN]\n> '],
+    ['おすすめの組み合わせ', '- [[jei]] — レシピ確認に便利'],
+  ],
+  articles: [
+    ['はじめに', '（この記事で紹介する内容を書く）'],
+    ['紹介するMOD', '### 1. [[mod-id]]\n- おすすめポイント: \n- 対応バージョン: \n\n### 2. [[mod-id]]\n- おすすめポイント: '],
+    ['まとめ', ''],
+  ],
+};
+const templateText = col => TEMPLATES[col].map(([h, b]) => `## ${h}\n${b}\n`).join('\n');
+
+const TOOLBAR = [
+  ['B', '太字', 'wrap', '**', '**', '太字'],
+  ['I', '斜体', 'wrap', '*', '*', '斜体'],
+  ['S', '取り消し線', 'wrap', '~~', '~~', '取り消し'],
+  ['🖍', 'マーカー', 'wrap', '==', '==', '強調'],
+  ['H', '見出し', 'line', '## '],
+  ['H3', '小見出し', 'line', '### '],
+  ['・', '箇条書き', 'line', '- '],
+  ['1.', '番号付き', 'line', '1. '],
+  ['🔗', 'リンク', 'wrap', '[', '](https://)', 'リンク文字'],
+  ['📄', '他のMODページ', 'wrap', '[[', ']]', 'ページID'],
+  ['📷', '画像・GIFをカーソル位置にアップロード（貼り付け・ドラッグ＆ドロップでもOK）', 'upload'],
+  ['表', '表', 'insert', '\n| 項目 | 説明 |\n|---|---|\n| | |\n'],
+  ['🧱', '作業台レシピ', 'insert', RECIPE_CRAFT],
+  ['🔥', 'かまどレシピ', 'insert', RECIPE_SMELT],
+  ['💡', 'ヒント', 'insert', '\n> [!TIP]\n> '],
+  ['⚠️', '注意', 'insert', '\n> [!WARN]\n> '],
+  ['`', 'コード', 'wrap', '`', '`', 'code'],
+  ['📋 テンプレ', '足りない見出しをひな形から追加', 'template'],
+];
+
+function chipGroup(group, all, selected) {
+  return `<div class="pick-row" data-group="${group}">${all.map(v =>
+    `<button type="button" class="chip${selected.includes(v) ? ' on' : ''}" aria-pressed="${selected.includes(v)}" data-v="${esc(v)}">${esc(v)}</button>`).join('')}</div>`;
+}
+
+async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) {
+  const K = KINDS[col];
+  const isMod = col === 'pages';
+  loading();
+  let cur = null;
+  if (!isNew) {
+    try { cur = await api(`/${col}/${encodeURIComponent(slug)}`); } catch (e) { app.innerHTML = errorBox(e); return; }
+  } else if (slug && listOf(col).some(m => m.slug === slug)) {
+    navigate(K.edit(slug)); return;
+  }
+  if (!canEdit(cur)) {
+    app.innerHTML = `<div class="empty">🔒 ${cur?.locked ? 'このページはロックされているため、管理者しか編集できません。' : '現在、編集は一時停止されています。'}
+      <br><br><a class="btn" href="${cur ? K.view(slug) : K.listPath}">戻る</a></div>`;
+    return;
+  }
+  let src = cur || { name: '', summary: '', versions: [], loaders: [], tags: [], author: '', link: '', image: '', body: templateText(col), downloads: 0, downloadsAt: '' };
+  if (revertFrom) {
+    try { src = await api(`/${col}/${encodeURIComponent(slug)}/history/${revertFrom}`); } catch (e) { app.innerHTML = errorBox(e); return; }
+  }
+  const baseRev = cur?.rev || 0;
+
+  // 下書き：?draft=ID で開いたらその内容を読み込む。既存ページに下書きがあれば知らせる
+  const draftParam = new URLSearchParams(location.search).get('draft');
+  const draftId = draftParam || (isNew ? `${col}:new:${Date.now().toString(36)}` : `${col}:${slug}`);
+  const openedDraft = draftParam ? drafts.get(draftParam) : null;
+  if (openedDraft) {
+    src = { ...src, ...openedDraft.data };
+    if (isNew && openedDraft.data.slug) slug = openedDraft.data.slug;
+  }
+  const waitingDraft = !draftParam && !isNew && !revertFrom ? drafts.get(draftId) : null;
+  const what = isMod ? 'MODページ' : '記事';
+  setMeta(pageTitle(isNew ? `新しい${what}を作る` : `${cur.name} を編集`));
+
+  app.innerHTML = `
+    <div class="crumb">${crumbRoot(col)} › ${isNew ? `新しい${what}` : `<a href="${K.view(slug)}">${esc(cur.name)}</a> › 編集`}</div>
+    <h1 class="page-title">${isNew ? `新しい${what}を作る` : `「${esc(cur.name)}」を編集`}</h1>
+    ${revertFrom ? `<div class="notice">版 ${revertFrom} の内容を読み込みました。保存すると、この内容で新しい版として差し戻されます。</div>` : ''}
+    ${waitingDraft ? `<div class="notice draft-notice">📄 このページの下書きがあります（${fmt(waitingDraft.savedAt)} 保存）
+      <a class="btn primary" href="${draftHref(draftId, waitingDraft)}">下書きを開く</a>
+      <button type="button" class="btn" data-drop-draft>下書きを削除</button></div>` : ''}
+    ${openedDraft ? `<div class="notice draft-notice">📄 ${fmt(openedDraft.savedAt)} に保存した下書きを開いています。${
+      !isNew && cur && openedDraft.baseRev < cur.rev ? '<br><strong>下書きのあとにページが更新されています。</strong>保存すると相手の変更を上書きするので、<a href="' + K.hist(slug) + '" target="_blank">履歴</a>で確認してください。' : ''}</div>` : ''}
+    <form class="edit-form" autocomplete="off">
+      <section class="panel">
+        <h2>基本情報</h2>
+        ${isMod ? `
+        <div class="fetch-box">
+          <label class="field wide"><span>配布ページURL <small>CurseForge / Modrinth</small></span>
+            <div class="input-with-btn"><input name="link" type="url" maxlength="400" value="${esc(src.link)}" placeholder="https://www.curseforge.com/minecraft/mc-mods/..."><button type="button" class="btn" data-fetch>🔍 情報を取得</button></div>
+          </label>
+          <p class="muted small">URLを入れて「情報を取得」を押すと、MOD名・対応バージョン・ローダー・作者・ダウンロード数などを読み込みます（反映前に確認できます）。</p>
+        </div>` : ''}
+        <div class="fields">
+          <label class="field"><span>${isMod ? 'MOD名' : '記事のタイトル'} <b class="req">必須</b></span><input name="name" maxlength="80" required value="${esc(src.name)}" ${isMod ? '' : 'placeholder="例: 1.20.1 おすすめ軽量化MOD 5選"'}></label>
+          ${isNew ? `<label class="field"><span>ページID <b class="req">必須</b><small>URLになります（半角英数字とハイフン）</small></span><input name="slug" maxlength="50" pattern="[a-z0-9][a-z0-9\\-]*" required value="${esc(slug || '')}" placeholder="${isMod ? '例: create' : '例: lightweight-mods-1-20-1'}"></label>` : ''}
+          <label class="field wide"><span>ひとこと説明</span><input name="summary" maxlength="200" value="${esc(src.summary)}" placeholder="一覧や検索結果に表示される短い説明"></label>
+          ${isMod ? `<label class="field"><span>作者</span><input name="author" maxlength="80" value="${esc(src.author)}"></label>` : ''}
+          <label class="field ${isMod ? '' : 'wide'}"><span>${isMod ? 'アイコン・画像' : 'アイキャッチ画像'}</span>
+            <div class="input-with-btn"><input name="image" maxlength="400" value="${esc(src.image)}" placeholder="https://... またはアップロード"><button type="button" class="btn" data-upload-image>📷</button></div>
+          </label>
+          <input type="hidden" name="downloads" value="${src.downloads || 0}"><input type="hidden" name="downloadsAt" value="${esc(src.downloadsAt || '')}">
+        </div>
+        <div class="downloads-note muted small">${src.downloads ? `ダウンロード数: ${src.downloads.toLocaleString()}（${esc(src.downloadsAt)} 時点）` : ''}</div>
+      </section>
+      <section class="panel">
+        <h2>タグ <small>クリックで選択（複数選択できます）${isMod ? '' : '・記事は任意'}</small></h2>
+        <div class="pick"><div class="pick-label">対応バージョン</div>${chipGroup('versions', VERSIONS, src.versions)}</div>
+        <div class="pick"><div class="pick-label">MODローダー</div>${chipGroup('loaders', LOADERS, src.loaders)}</div>
+        <div class="pick"><div class="pick-label">ジャンル</div>${chipGroup('tags', TAGS, src.tags)}</div>
+      </section>
+      <section class="panel">
+        <h2>本文 <small><a href="${u('/help')}" target="_blank">書き方を見る</a></small></h2>
+        <div class="toolbar">${TOOLBAR.map((t, i) => `<button type="button" title="${t[1]}" data-tool="${i}">${t[0]}</button>`).join('')}</div>
+        <div class="editor">
+          <div class="editor-tabs"><button type="button" class="on" data-pane="write">書く</button><button type="button" data-pane="preview">プレビュー</button></div>
+          <textarea name="body" spellcheck="false">${esc(src.body)}</textarea>
+          <div class="preview md"></div>
+        </div>
+      </section>
+      <section class="panel save-panel">
+        <div class="fields">
+          <label class="field"><span>ユーザー名 <b class="req">必須</b><small>履歴に表示されます</small></span><input name="user" maxlength="24" required value="${esc(getUser())}"></label>
+          <label class="field"><span>編集内容の要約</span><input name="comment" maxlength="120" value="${esc(src.comment ?? (revertFrom ? `版 ${revertFrom} に差し戻し` : ''))}" placeholder="例: 導入方法を追記"></label>
+          <input name="website" class="hp" tabindex="-1" aria-hidden="true">
+        </div>
+        <div class="form-error" role="alert"></div>
+        <div class="save-row">
+          <span class="draft-status muted small">下書きはこのブラウザに保存されます（30秒ごとに自動保存）</span>
+          <div class="btns">
+            <a class="btn" href="${isNew ? K.listPath : K.view(slug)}">キャンセル</a>
+            <button class="btn" type="button" data-save-draft>💾 下書き保存</button>
+            <button class="btn primary" type="submit">公開する</button>
+          </div>
+        </div>
+      </section>
+    </form>`;
+
+  const form = app.querySelector('form');
+  const ta = form.body;
+  const preview = app.querySelector('.preview');
+  const errEl = app.querySelector('.form-error');
+  let rev = baseRev;
+  const refresh = () => { preview.innerHTML = renderMarkdown(ta.value) || '<p class="muted">（プレビュー）</p>'; };
+  const dirty = () => { state.dirty = true; };
+  refresh();
+  state.dirty = false;
+  form.addEventListener('input', dirty);
+  ta.addEventListener('input', refresh);
+
+  // ----- 下書き保存 -----
+  const draftStatus = app.querySelector('.draft-status');
+  const collect = () => {
+    const picked = g => [...app.querySelectorAll(`[data-group="${g}"] .chip.on`)].map(b => b.dataset.v);
+    return {
+      name: form.name.value, slug: form.slug?.value || '', summary: form.summary.value, author: form.author?.value || '',
+      link: form.link?.value || '', image: form.image.value, body: ta.value, comment: form.comment.value,
+      versions: picked('versions'), loaders: picked('loaders'), tags: picked('tags'),
+      downloads: Number(form.downloads.value) || 0, downloadsAt: form.downloadsAt.value,
+    };
+  };
+  const saveDraft = (auto = false) => {
+    const ok = drafts.put(draftId, { col, slug: isNew ? '' : slug, isNew, data: collect(), baseRev: rev, savedAt: new Date().toISOString() });
+    if (!ok) { draftStatus.textContent = '⚠️ 下書きを保存できませんでした（ブラウザの保存領域がいっぱいか、使えない設定です）'; return; }
+    state.dirty = false;
+    draftStatus.textContent = `💾 ${auto ? '自動で' : ''}下書き保存しました（${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}）`;
+    if (!auto) toast('💾 下書きを保存しました');
+    // 新規ページは、再読み込みしても同じ下書きを開けるようURLに下書きIDを入れておく
+    if (!draftParam && isNew) history.replaceState(null, '', `${location.pathname}?draft=${encodeURIComponent(draftId)}`);
+  };
+  app.querySelector('[data-save-draft]').addEventListener('click', () => saveDraft(false));
+  app.querySelector('[data-drop-draft]')?.addEventListener('click', e => {
+    if (!confirm('この下書きを削除しますか？')) return;
+    drafts.remove(draftId);
+    e.target.closest('.draft-notice').remove();
+    toast('下書きを削除しました');
+  });
+  const autoSave = setInterval(() => {
+    if (!app.contains(form)) { clearInterval(autoSave); return; }
+    if (state.dirty) saveDraft(true);
+  }, 30_000);
+
+  if (isNew) {
+    let touched = !!slug;
+    form.slug.addEventListener('input', () => { touched = true; });
+    form.name.addEventListener('input', () => { if (!touched) form.slug.value = slugify(form.name.value); });
+  }
+
+  const setChip = (b, on) => { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); };
+  app.querySelectorAll('.pick-row .chip').forEach(b => b.addEventListener('click', () => { setChip(b, !b.classList.contains('on')); dirty(); }));
+
+  // 本文への画像・GIFアップロード（カーソル位置に入る。複数まとめてOK）
+  let uploadSeq = 0;
+  const insertImages = async files => {
+    files = files.filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    const marks = files.map(() => `![アップロード中…${++uploadSeq}]()`);
+    ta.setRangeText(`\n${marks.join('\n')}\n`, ta.selectionStart, ta.selectionEnd, 'end');
+    refresh();
+    let ok = 0;
+    for (const [i, file] of files.entries()) { // 1枚ずつ順番に
+      try {
+        const imgUrl = await uploadImage(file);
+        const alt = file.name.replace(/\.[a-z0-9]+$/i, '').replace(/[[\]|]/g, '').slice(0, 40) || '画像';
+        ta.value = ta.value.replace(marks[i], `![${alt}](${imgUrl})`);
+        ok++;
+      } catch (e) {
+        ta.value = ta.value.replace(`${marks[i]}\n`, '').replace(marks[i], '');
+        alert(`${file.name}: ${e.message}`);
+      }
+      refresh();
+    }
+    if (ok) toast(`📷 ${ok}枚アップロードしました（![説明|300](…) のように書くと幅を変えられます）`);
+    dirty();
+  };
+  ta.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); insertImages(files); }
+  });
+  // ドラッグ＆ドロップ：落とした位置にカーソルを移してから入れる
+  ta.addEventListener('dragover', e => {
+    if ([...e.dataTransfer.items].some(i => i.kind === 'file')) { e.preventDefault(); ta.classList.add('drop'); }
+  });
+  ta.addEventListener('dragleave', () => ta.classList.remove('drop'));
+  ta.addEventListener('drop', e => {
+    const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'));
+    ta.classList.remove('drop');
+    if (!files.length) return;
+    e.preventDefault();
+    const pos = caretFromPoint(ta, e.clientX, e.clientY);
+    if (pos != null) ta.setSelectionRange(pos, pos);
+    insertImages(files);
+  });
+
+  app.querySelectorAll('[data-tool]').forEach(b => b.addEventListener('click', async () => {
+    const [, , kind, a, z = '', ph = ''] = TOOLBAR[b.dataset.tool];
+    const { selectionStart: s, selectionEnd: e, value: v } = ta;
+    if (kind === 'upload') {
+      const files = await pickFile({ multiple: true });
+      if (files.length) insertImages(files);
+      return;
+    }
+    if (kind === 'template') {
+      const missing = TEMPLATES[col].filter(([h]) => !new RegExp(`^#{1,3}\\s*${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(v));
+      if (!missing.length) { toast('ひな形の見出しはすべてそろっています'); return; }
+      ta.value = v.replace(/\s*$/, '\n\n') + missing.map(([h, body]) => `## ${h}\n${body}\n`).join('\n');
+      toast(`見出しを${missing.length}個追加しました`);
+    } else if (kind === 'wrap') {
+      const sel = v.slice(s, e) || ph;
+      ta.setRangeText(a + sel + z, s, e);
+      ta.setSelectionRange(s + a.length, s + a.length + sel.length);
+    } else if (kind === 'line') {
+      const ls = v.lastIndexOf('\n', s - 1) + 1;
+      const le = v.indexOf('\n', e) === -1 ? v.length : v.indexOf('\n', e);
+      ta.setRangeText(v.slice(ls, le).split('\n').map(l => a + l).join('\n'), ls, le, 'end');
+    } else {
+      ta.setRangeText(a, s, e, 'end');
+    }
+    ta.focus();
+    dirty(); refresh();
+  }));
+
+  app.querySelector('[data-upload-image]').addEventListener('click', async () => {
+    const file = await pickFile();
+    if (!file) return;
+    try { form.image.value = await uploadImage(file); dirty(); toast('📷 画像をアップロードしました'); } catch (e) { alert(e.message); }
+  });
+
+  // 配布ページから情報を取得 → 確認してから反映
+  app.querySelector('[data-fetch]')?.addEventListener('click', async ev => {
+    const btn = ev.currentTarget;
+    if (!form.link.value.trim()) { form.link.focus(); return; }
+    btn.disabled = true; btn.textContent = '取得中…';
+    let info;
+    try { info = await api(`/modinfo?url=${encodeURIComponent(form.link.value.trim())}`); } catch (e) { alert(e.message); return; }
+    finally { btn.disabled = false; btn.textContent = '🔍 情報を取得'; }
+    const picked = g => [...app.querySelectorAll(`[data-group="${g}"] .chip.on`)].map(b => b.dataset.v);
+    const scalar = [
+      ['name', 'MOD名', form.name.value, info.name],
+      ['summary', 'ひとこと説明', form.summary.value, info.summary],
+      ['author', '作者', form.author.value, info.author],
+      ['image', 'アイコン', form.image.value, info.image],
+      ['link', '配布ページURL', form.link.value, info.link],
+    ].filter(([, , , v]) => v);
+    const arrays = [['versions', '対応バージョン', info.versions], ['loaders', 'MODローダー', info.loaders], ['tags', 'ジャンル', info.tags]]
+      .map(([k, l, vals]) => [k, l, vals.filter(v => !picked(k).includes(v))]).filter(([, , vals]) => vals.length);
+    const show = (k, v) => (k === 'image' ? `<img class="fetch-icon" src="${esc(v)}" alt=""> ` : '') + esc(v);
+    openModal('🔍 取得した情報を確認', `
+      ${info.matchedBy === 'search' ? '<div class="notice">⚠️ CurseForge のURLから、Modrinth で名前が近いMODを探した結果です。<strong>同じMODか必ず確認してください。</strong></div>' : ''}
+      <p class="muted small">反映する項目にチェックを入れてください。情報元: <a href="${esc(info.sourceUrl || info.modrinthUrl)}" target="_blank" rel="noopener">${esc(info.infoFrom || 'Modrinth')}</a>（説明文は英語のことがあります）</p>
+      <div class="table-wrap"><table class="fetch-table">
+        <thead><tr><th></th><th>項目</th><th>今の内容</th><th>取得した内容</th></tr></thead>
+        <tbody>
+          ${scalar.map(([k, l, curV, v]) => `<tr><td><input type="checkbox" name="f-${k}" ${!curV || k === 'image' && !curV ? 'checked' : ''} ${curV === v ? 'disabled' : ''}></td><th>${l}</th><td>${curV ? show(k, curV) : '<span class="muted">（空）</span>'}</td><td>${show(k, v)}</td></tr>`).join('')}
+          ${arrays.map(([k, l, vals]) => `<tr><td><input type="checkbox" name="f-${k}" checked></td><th>${l}</th><td class="muted">追加</td><td>${vals.map(v => `<span class="tag">${esc(v)}</span>`).join(' ')}</td></tr>`).join('')}
+          ${info.downloads ? `<tr><td><input type="checkbox" name="f-downloads" checked></td><th>ダウンロード数</th><td>${form.downloads.value > 0 ? Number(form.downloads.value).toLocaleString() : '<span class="muted">（空）</span>'}</td><td>${info.downloads.toLocaleString()}（${formatDownloads(info.downloads)}）</td></tr>` : ''}
+        </tbody>
+      </table></div>`,
+    m => {
+      const on = k => m[`f-${k}`]?.checked;
+      for (const [k] of scalar) if (on(k)) form[k].value = info[k];
+      if (on('name')) form.name.dispatchEvent(new Event('input', { bubbles: true })); // ページIDも自動で付ける
+      for (const [k, , vals] of arrays) {
+        if (on(k)) vals.forEach(v => { const b = app.querySelector(`[data-group="${k}"] .chip[data-v="${CSS.escape(v)}"]`); if (b) setChip(b, true); });
+      }
+      if (on('downloads')) {
+        form.downloads.value = info.downloads;
+        form.downloadsAt.value = info.downloadsAt;
+        app.querySelector('.downloads-note').textContent = `ダウンロード数: ${info.downloads.toLocaleString()}（${info.downloadsAt} 時点）`;
+      }
+      dirty();
+      toast('取得した情報を反映しました（まだ保存されていません）');
+    }, { submitLabel: 'チェックした項目を反映', wide: true });
+  });
+
+  app.querySelectorAll('[data-pane]').forEach(b => b.addEventListener('click', () => {
+    app.querySelectorAll('[data-pane]').forEach(x => x.classList.toggle('on', x === b));
+    app.querySelector('.editor').dataset.show = b.dataset.pane;
+  }));
+
+  // 検索結果の「＋ ページを作る」から来たときは、配布ページの情報をすぐ読み込む
+  const from = isNew && isMod && new URLSearchParams(location.search).get('from');
+  if (from && /^https:\/\/(www\.)?(modrinth\.com|curseforge\.com)\//.test(from)) {
+    form.link.value = from;
+    app.querySelector('[data-fetch]').click();
+  }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    errEl.innerHTML = '';
+    const target = isNew ? form.slug.value.trim() : slug;
+    if (isNew && listOf(col).some(m => m.slug === target)) {
+      errEl.innerHTML = `ページID「${esc(target)}」は既に使われています。<a href="${K.view(target)}">そのページを見る</a>`;
+      return;
+    }
+    const picked = g => [...app.querySelectorAll(`[data-group="${g}"] .chip.on`)].map(b => b.dataset.v);
+    const payload = {
+      name: form.name.value, summary: form.summary.value, author: form.author?.value || '', link: form.link?.value || '',
+      image: form.image.value, body: ta.value, versions: picked('versions'), loaders: picked('loaders'), tags: picked('tags'),
+      downloads: Number(form.downloads.value) || 0, downloadsAt: form.downloadsAt.value,
+      user: form.user.value, comment: form.comment.value, website: form.website.value, baseRev: rev,
+    };
+    setUser(payload.user.trim());
+    const btn = form.querySelector('[type=submit]');
+    btn.disabled = true; btn.textContent = '公開中…';
+    try {
+      await api(`/${col}/${encodeURIComponent(target)}`, { method: 'PUT', body: JSON.stringify(payload) });
+      state.dirty = false;
+      clearInterval(autoSave);
+      drafts.remove(draftId); // 公開できたので下書きは不要
+      await loadData();
+      navigate(K.view(target));
+    } catch (err) {
+      if (err.status === 409 && err.data.current) {
+        const c = err.data.current;
+        errEl.innerHTML = isNew
+          ? `ページID「${esc(target)}」は既に使われています。`
+          : `${esc(err.message)}（${esc(c.updatedBy)}・${fmt(c.updatedAt)}）<br>
+             <a href="${K.hist(slug)}/${c.rev}" target="_blank">相手の変更を確認する</a> ／
+             <button type="button" class="linkish" data-force>自分の内容で上書き保存する</button>`;
+        errEl.querySelector('[data-force]')?.addEventListener('click', () => { rev = c.rev; form.requestSubmit(); });
+      } else {
+        errEl.textContent = err.message;
+      }
+    } finally {
+      btn.disabled = false; btn.textContent = '公開する';
+    }
+  });
+}
+
+// テキストエリア内の座標から文字位置を求める（ドロップした場所に入れるため）
+function caretFromPoint(ta, x, y) {
+  const r = ta.getBoundingClientRect();
+  const cs = getComputedStyle(ta);
+  const mirror = document.createElement('div');
+  for (const p of ['fontFamily', 'fontSize', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopWidth', 'borderLeftWidth', 'boxSizing', 'whiteSpace', 'wordBreak', 'overflowWrap']) mirror.style[p] = cs[p];
+  Object.assign(mirror.style, { position: 'fixed', left: `${r.left}px`, top: `${r.top - ta.scrollTop}px`, width: `${r.width}px`, visibility: 'hidden', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' });
+  const spans = [...ta.value].map(ch => { const sp = document.createElement('span'); sp.textContent = ch; return sp; });
+  mirror.append(...spans, document.createTextNode('​'));
+  document.body.append(mirror);
+  let best = null, bestD = Infinity;
+  spans.forEach((sp, i) => {
+    const b = sp.getBoundingClientRect();
+    if (y < b.top || y > b.bottom + 2) return;
+    const d = Math.abs(x - (b.left + b.width / 2));
+    if (d < bestD) { bestD = d; best = x > b.left + b.width / 2 ? i + 1 : i; }
+  });
+  mirror.remove();
+  if (best == null) return null;
+  // 行の途中なら行末まで進めて、文の途中で改行されないようにする
+  const nl = ta.value.indexOf('\n', best);
+  return nl === -1 ? ta.value.length : nl;
+}
+
+/* ===== 履歴・差分 ===== */
+function diffLines(a, b) {
+  const A = a.split('\n'), B = b.split('\n');
+  const n = A.length, m = B.length;
+  if (n * m > 4_000_000) return null;
+  const dp = new Int32Array((n + 1) * (m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i * (m + 1) + j] = A[i] === B[j] ? dp[(i + 1) * (m + 1) + j + 1] + 1
+        : Math.max(dp[(i + 1) * (m + 1) + j], dp[i * (m + 1) + j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) { ops.push(['=', A[i]]); i++; j++; }
+    else if (j < m && (i >= n || dp[i * (m + 1) + j + 1] >= dp[(i + 1) * (m + 1) + j])) ops.push(['+', B[j++]]);
+    else ops.push(['-', A[i++]]);
+  }
+  return ops;
+}
+
+function diffView(oldP, newP) {
+  const fields = [
+    ['name', '名前'], ['summary', '説明'], ['versions', 'バージョン'], ['loaders', 'ローダー'],
+    ['tags', 'タグ'], ['author', '作者'], ['link', '配布ページ'], ['image', '画像'], ['downloads', 'ダウンロード数'],
+  ];
+  const show = v => (Array.isArray(v) ? v.join(', ') : String(v ?? '')) || '（なし）';
+  const meta = fields.filter(([k]) => JSON.stringify(oldP?.[k] ?? '') !== JSON.stringify(newP[k] ?? ''))
+    .map(([k, label]) => `<tr><th>${label}</th><td class="d-del">${esc(oldP ? show(oldP[k]) : '（なし）')}</td><td class="d-add">${esc(show(newP[k]))}</td></tr>`).join('');
+
+  const ops = diffLines(oldP?.body || '', newP.body);
+  let body = '';
+  if (!ops) body = '<p class="muted">差分が大きすぎるため表示できません。</p>';
+  else if (!ops.some(o => o[0] !== '=')) body = '<p class="muted">本文に変更はありません。</p>';
+  else {
+    const near = ops.map((_, i) => ops.slice(Math.max(0, i - 2), i + 3).some(o => o[0] !== '='));
+    let skipped = false;
+    body = '<div class="diff">' + ops.map((o, i) => {
+      if (!near[i]) { const s = skipped; skipped = true; return s ? '' : '<div class="d-skip">⋯</div>'; }
+      skipped = false;
+      const cls = o[0] === '+' ? 'd-add' : o[0] === '-' ? 'd-del' : '';
+      return `<div class="d-line ${cls}"><span class="d-mark">${o[0] === '=' ? ' ' : o[0]}</span>${esc(o[1]) || ' '}</div>`;
+    }).join('') + '</div>';
+  }
+  return `${meta ? `<h3>情報の変更</h3><div class="table-wrap"><table class="meta-diff"><thead><tr><th></th><th>変更前</th><th>変更後</th></tr></thead><tbody>${meta}</tbody></table></div>` : ''}
+    <h3>本文の変更</h3>${body}`;
+}
+
+async function renderHistory(col, slug) {
+  const K = KINDS[col];
+  loading();
+  let m;
+  try { m = await api(`/${col}/${encodeURIComponent(slug)}`); } catch (e) { app.innerHTML = errorBox(e); return; }
+  setMeta(pageTitle(`${m.name} の更新履歴`));
+  app.innerHTML = `
+    <div class="crumb">${crumbRoot(col)} › <a href="${K.view(slug)}">${esc(m.name)}</a> › 履歴</div>
+    <h1 class="page-title">「${esc(m.name)}」の更新履歴</h1>
+    <div class="table-wrap"><table class="history">
+      <thead><tr><th>版</th><th>日時</th><th>ユーザー</th><th>要約</th><th>文字数</th><th></th></tr></thead>
+      <tbody>${m.log.map(l => `
+        <tr>
+          <td>${l.rev}${l.rev === m.rev ? ' <span class="badge">最新</span>' : ''}</td>
+          <td class="nowrap">${fmt(l.at)}</td>
+          <td>${esc(l.user)}${crown(l)}${banBtn(l)}</td>
+          <td>${esc(l.comment) || '<span class="muted">—</span>'}</td>
+          <td>${delta(l.delta)}</td>
+          <td class="nowrap"><a href="${K.hist(slug)}/${l.rev}">差分・表示</a></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+  bindBanButtons();
+}
+
+async function renderRevision(col, slug, rev) {
+  const K = KINDS[col];
+  loading();
+  let cur, snap, prev = null;
+  const base = `/${col}/${encodeURIComponent(slug)}`;
+  try {
+    [cur, snap] = await Promise.all([api(base), api(`${base}/history/${rev}`)]);
+    if (rev > 1) prev = await api(`${base}/history/${rev - 1}`);
+  } catch (e) { app.innerHTML = errorBox(e); return; }
+  setMeta(pageTitle(`${snap.name}（版 ${rev}）`));
+  app.innerHTML = `
+    <div class="crumb">${crumbRoot(col)} › <a href="${K.view(slug)}">${esc(cur.name)}</a> › <a href="${K.hist(slug)}">履歴</a> › 版 ${rev}</div>
+    <div class="page-tools">
+      <h1 class="page-title">版 ${rev}${rev === cur.rev ? '（最新）' : ''}</h1>
+      <div class="btns">
+        ${rev > 1 ? `<a class="btn" href="${K.hist(slug)}/${rev - 1}">← 前の版</a>` : ''}
+        ${rev < cur.rev ? `<a class="btn" href="${K.hist(slug)}/${rev + 1}">次の版 →</a>` : ''}
+        ${rev < cur.rev && canEdit(cur) ? `<a class="btn primary" href="${K.revert(slug, rev)}">この版に戻す</a>` : ''}
+      </div>
+    </div>
+    <p class="rev-meta">${fmt(snap.at)} ・ <strong>${esc(snap.user)}</strong>${crown(snap)}${banBtn(snap)}${snap.comment ? ` ・ 「${esc(snap.comment)}」` : ''} ${delta(snap.delta)}</p>
+    <div class="editor-tabs rev-tabs"><button type="button" class="on" data-v="diff">差分（版 ${rev - 1 || 'なし'} → ${rev}）</button><button type="button" data-v="page">この版の表示</button></div>
+    <div class="rev-pane" data-v="diff">${rev === 1 ? '<p class="muted">最初の版です（ページ作成）。</p>' : ''}${diffView(prev, snap)}</div>
+    <div class="rev-pane" data-v="page" hidden>${pageView(snap, col)}</div>`;
+  app.querySelectorAll('.rev-tabs button').forEach(b => b.addEventListener('click', () => {
+    app.querySelectorAll('.rev-tabs button').forEach(x => x.classList.toggle('on', x === b));
+    app.querySelectorAll('.rev-pane').forEach(p => { p.hidden = p.dataset.v !== b.dataset.v; });
+  }));
+  bindPageView();
+  bindBanButtons();
+}
+
+const ACTIONS = { lock: '🔒 ロック', unlock: '🔓 ロック解除', delete: '🗑 削除', restore: '♻️ 復元' };
+
+async function renderRecent() {
+  loading();
+  let list;
+  try { list = await api('/recent'); } catch (e) { app.innerHTML = errorBox(e); return; }
+  setMeta(pageTitle('最近の更新'), 'Minecraft MOD Wikiの最近の編集履歴です。');
+  const K = r => KINDS[r.col || 'pages'];
+  const kindBadge = r => (r.col === 'articles' ? ' <span class="badge">記事</span>' : '');
+  app.innerHTML = `
+    <h1 class="page-title">最近の更新</h1>
+    <p class="lead">直近100件の編集です。</p>
+    <ul class="recent">${list.map(r => r.action ? `
+      <li>
+        <span class="nowrap muted">${fmt(r.at)}</span>
+        <a href="${K(r).view(r.slug)}"><strong>${esc(r.name)}</strong></a>${kindBadge(r)}
+        <span class="badge">${ACTIONS[r.action] || esc(r.action)}</span>${crown(r)}
+      </li>` : `
+      <li>
+        <span class="nowrap muted">${fmt(r.at)}</span>
+        <a href="${K(r).view(r.slug)}"><strong>${esc(r.name)}</strong></a>${kindBadge(r)}
+        ${r.isNew ? '<span class="badge new">新規</span>' : ''}
+        <a class="muted" href="${K(r).hist(r.slug)}/${r.rev}">（差分）</a>
+        ${delta(r.delta)} ・ ${esc(r.user)}${crown(r)}${banBtn(r)}${r.comment ? ` <span class="muted">「${esc(r.comment)}」</span>` : ''}
+      </li>`).join('') || '<li class="muted">まだ更新はありません。</li>'}</ul>`;
+  bindBanButtons();
+}
+
+/* ===== 管理画面 ===== */
+async function renderAdmin() {
+  if (!state.admin) { app.innerHTML = '<div class="empty">管理者のみ表示できます。</div>'; return; }
+  loading();
+  let s;
+  try { s = await api('/admin/state'); } catch (e) { app.innerHTML = errorBox(e); return; }
+  setMeta(pageTitle('管理'));
+  const bans = Object.entries(s.bans);
+  const link = p => `<a href="${KINDS[p.col || 'pages'].view(p.slug)}">${esc(p.name)}</a>${p.col === 'articles' ? ' <span class="badge">記事</span>' : ''}`;
+  app.innerHTML = `
+    <div class="page-head">
+      <div><h1 class="page-title">👑 管理画面</h1><p class="lead">キーボードで <code>admin</code> と打つといつでもここに来られます。</p></div>
+      <button class="btn" data-logout>ログアウト</button>
+    </div>
+    <section class="panel reports-panel">
+      <h2>🚩 通報 <small>${s.reports.length}件（未対応）</small></h2>
+      ${s.reports.length ? `<ul class="reports">${s.reports.map(r => `
+        <li>
+          <div>${link(r)} <span class="badge warn">${esc(r.reason)}</span> <span class="muted small">${fmt(r.at)}${r.user ? ` ・ ${esc(r.user)}` : ''} ・ 通報時の版 ${r.rev}</span></div>
+          ${r.comment ? `<p>${esc(r.comment)}</p>` : ''}
+          <div class="btns"><a class="btn" href="${KINDS[r.col].hist(r.slug)}">履歴を見る</a><button class="btn" data-resolve="${r.id}">✓ 対応済みにする</button>${r.ipHash ? `<button class="btn danger" data-ban="${r.ipHash}" data-user="${esc(r.user || '通報者')}">通報者をブロック</button>` : ''}</div>
+        </li>`).join('')}</ul>` : '<p class="muted">未対応の通報はありません。</p>'}
+    </section>
+    <div class="admin-grid">
+      <section class="panel">
+        <h2>サイト全体の編集</h2>
+        <p>${s.settings.editLocked ? '<strong class="danger-text">停止中</strong>：管理者以外は編集・新規作成・画像アップロードできません。' : '<strong>受付中</strong>：だれでも編集できます。'}</p>
+        <button class="btn ${s.settings.editLocked ? 'primary' : 'danger'}" data-sitelock>${s.settings.editLocked ? '▶ 編集を再開する' : '⏸ 編集を停止する'}</button>
+      </section>
+      <section class="panel">
+        <h2>ロック中のページ <small>${s.locked.length}件</small></h2>
+        ${s.locked.length ? `<ul>${s.locked.map(p => `<li>${link(p)} <button class="linkish" data-unlock="${p.col}/${p.slug}">解除</button></li>`).join('')}</ul>`
+          : '<p class="muted">ありません。各ページの「🔒 ロック」でロックできます。</p>'}
+      </section>
+      <section class="panel">
+        <h2>ブロック中のユーザー <small>${bans.length}件</small></h2>
+        ${bans.length ? `<ul>${bans.map(([h, b]) => `<li><strong>${esc(b.user || '(名前なし)')}</strong> <span class="muted">${fmt(b.at)}${b.reason ? ` ・ ${esc(b.reason)}` : ''}</span> <button class="linkish" data-unban="${h}">解除</button></li>`).join('')}</ul>`
+          : '<p class="muted">ありません。履歴や最近の更新の「🚫 ブロック」から追加できます。</p>'}
+      </section>
+      <section class="panel">
+        <h2>削除したページ <small>${s.deleted.length}件</small></h2>
+        ${s.deleted.length ? `<ul>${s.deleted.map(p => `<li>${esc(p.name)}${p.col === 'articles' ? ' <span class="badge">記事</span>' : ''} <span class="muted">${fmt(p.deletedAt)}</span> <button class="linkish" data-restore="${p.col}/${p.slug}">復元</button></li>`).join('')}</ul>`
+          : '<p class="muted">ありません。</p>'}
+      </section>
+    </div>
+    <section class="panel">
+      <h2>📷 最近アップロードされた画像 <small>不適切なものは削除できます</small></h2>
+      ${s.images.length ? `<div class="image-grid">${s.images.map(i => `
+        <figure><a href="${esc(i.url || u(`/img/${i.id}`))}" target="_blank"><img src="${esc(i.url || u(`/img/${i.id}`))}" alt="" loading="lazy"></a>
+          <figcaption>${fmt(i.at)}<br>${esc(i.user || '名前なし')} ・ ${Math.round(i.size / 1024)}KB<br>
+          <button class="linkish danger-text" data-delimg="${i.id}">削除</button>${i.ipHash ? ` <button class="linkish ban" data-ban="${i.ipHash}" data-user="${esc(i.user || 'アップロード者')}">ブロック</button>` : ''}</figcaption></figure>`).join('')}</div>`
+        : '<p class="muted">まだありません。</p>'}
+    </section>`;
+  app.querySelector('[data-logout]').addEventListener('click', async () => {
+    store.set(TOKEN_KEY, '');
+    await refreshSettings();
+    toast('ログアウトしました');
+    navigate('/');
+  });
+  app.querySelector('[data-sitelock]').addEventListener('click', () =>
+    adminAction('/admin/settings', 'POST', { editLocked: !s.settings.editLocked }, s.settings.editLocked ? '編集を再開しました' : '編集を停止しました'));
+  app.querySelectorAll('[data-unlock]').forEach(b => b.addEventListener('click', () =>
+    adminAction(`/${b.dataset.unlock}/lock`, 'POST', { locked: false }, 'ロックを解除しました')));
+  app.querySelectorAll('[data-unban]').forEach(b => b.addEventListener('click', () =>
+    adminAction('/admin/unban', 'POST', { ipHash: b.dataset.unban }, 'ブロックを解除しました')));
+  app.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', () =>
+    adminAction(`/${b.dataset.restore}/restore`, 'POST', null, '復元しました')));
+  app.querySelectorAll('[data-resolve]').forEach(b => b.addEventListener('click', () =>
+    adminAction('/admin/resolve-report', 'POST', { id: b.dataset.resolve }, '対応済みにしました')));
+  app.querySelectorAll('[data-delimg]').forEach(b => b.addEventListener('click', () => {
+    if (confirm('この画像を削除しますか？（使われているページでは表示されなくなります）')) adminAction('/admin/delete-image', 'POST', { id: b.dataset.delimg }, '画像を削除しました');
+  }));
+  bindBanButtons();
+}
+
+/* ===== 下書き一覧 ===== */
+function renderDrafts() {
+  setMeta(pageTitle('下書き'));
+  const list = Object.entries(drafts.all()).sort((a, b) => b[1].savedAt.localeCompare(a[1].savedAt));
+  app.innerHTML = `
+    <h1 class="page-title">📄 下書き</h1>
+    <p class="lead">このブラウザに保存されている書きかけのページです。ほかの端末やブラウザからは見えません。公開すると自動で消えます。</p>
+    ${list.length ? `<ul class="draft-list">${list.map(([id, d]) => `
+      <li>
+        <div>
+          <strong>${esc(d.data.name || '（タイトル未入力）')}</strong>
+          <span class="badge">${KINDS[d.col].label}</span>${d.isNew ? ' <span class="badge new">新規</span>' : ''}
+          <div class="muted small">${fmt(d.savedAt)} 保存 ・ 本文 ${d.data.body.length.toLocaleString()} 文字${d.isNew ? '' : ` ・ <a href="${KINDS[d.col].view(d.slug)}">元のページ</a>`}</div>
+        </div>
+        <div class="btns"><a class="btn primary" href="${draftHref(id, d)}">✏️ 続きを書く</a><button class="btn danger" data-del="${esc(id)}">削除</button></div>
+      </li>`).join('')}</ul>` : '<div class="empty">下書きはありません。編集画面の「💾 下書き保存」で保存できます。</div>'}`;
+  app.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('この下書きを削除しますか？')) return;
+    drafts.remove(b.dataset.del);
+    renderDrafts();
+  }));
+}
+
+/* ===== 書き方 ===== */
+const HELP = [
+  ['見出し', '## 大見出し\n### 小見出し'],
+  ['太字・斜体', '**太字** と *斜体* と ~~取り消し~~'],
+  ['マーカー', '==目立たせたい部分=='],
+  ['コード', '`/give @p minecraft:diamond`'],
+  ['箇条書き', '- りんご\n- みかん\n  - ネストは2スペース'],
+  ['番号付き', '1. 作業台を作る\n2. かまどを作る'],
+  ['リンク', '[CurseForge](https://www.curseforge.com)'],
+  ['MODページへ', '[[jei]] や [[jei|JEIはこちら]]'],
+  ['画像・GIF', '![説明](画像のURL)\n（📷ボタン・貼り付け・ドラッグ＆ドロップで\nカーソル位置にアップロード）'],
+  ['画像の大きさ', '![説明|300](画像のURL)\n![説明|小](画像のURL)\n（数字＝幅px。小・中・大も使える）'],
+  ['表', '| キー | 動作 |\n|---|---|\n| R | レシピ |'],
+  ['作業台レシピ', '```recipe\n鉄 | 鉄 | 鉄\n   | 棒 |\n   | 棒 |\n=> 鉄のツルハシ\n```'],
+  ['かまどレシピ', '```smelt\n鉄鉱石\n=> 鉄インゴット\n```'],
+  ['ヒント', '> [!TIP]\n> 便利な情報'],
+  ['注意', '> [!WARN]\n> 気をつけること'],
+  ['引用', '> ふつうの引用'],
+  ['区切り線', '---'],
+];
+
+function renderHelp() {
+  setMeta(pageTitle('書き方・編集ガイド'), 'Minecraft MOD Wikiのページの書き方（Markdown記法・レシピの書き方）と編集ルールです。');
+  app.innerHTML = `
+    <h1 class="page-title">書き方</h1>
+    <p class="lead">各ページの「✏️ 編集」から、だれでも編集できます。編集画面のボタンでも入力できます。</p>
+    <div class="md">
+      <div class="table-wrap"><table class="help-table">
+        <thead><tr><th>用途</th><th>書き方</th><th>表示</th></tr></thead>
+        <tbody>${HELP.map(([n, src]) => `<tr><td>${n}</td><td><pre><code>${esc(src)}</code></pre></td><td>${n.startsWith('画像') ? '<span class="muted">（画像が表示されます）</span>' : renderMarkdown(src)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <p>改行はそのまま改行として表示されます。空行で段落が分かれます。</p>
+      <h2>レシピの書き方</h2>
+      <ul>
+        <li>作業台は <code>|</code> で3列に区切り、3行まで書きます。空きマスは何も書かなくてOKです。</li>
+        <li><code>=&gt;</code> の後ろに完成品を書きます。<code>x4</code> のように書くと個数が付きます。</li>
+        <li>マスの中に <code>[[ページID]]</code> を書くと、そのMODのページへのリンクになります。</li>
+      </ul>
+      <h2>編集のルール</h2>
+      <ul>
+        <li>編集するとユーザー名と日時が<strong>履歴</strong>に残ります。</li>
+        <li>荒らされても、履歴の「この版に戻す」で元に戻せます。</li>
+        <li>おかしな内容を見つけたら、ページ下の「🚩 通報」で管理者に知らせてください。</li>
+      </ul>
+    </div>`;
+}
+
+/* ===== ルーティング（/mod/xxx のような普通のURL） ===== */
+let currentPath = location.pathname;
+let firstRender = true; // 最初の表示はサーバーが描画済みなので「読み込み中」を出さない
+
+// path はサイト内パス（/mod/xxx）でも、フォルダ付き（/mc-mod-wiki/mod/xxx）でもよい
+function navigate(path) {
+  const full = config.base && !path.startsWith(config.base + '/') && path !== config.base ? u(path) : path;
+  if (full === location.pathname + location.search) return route();
+  history.pushState(null, '', full);
+  route();
+}
+
+async function route() {
+  const path = location.pathname;
+  const sitePath = appPath(path);
+  if (state.dirty && path !== currentPath) {
+    if (!confirm('保存していない変更があります。ページを離れますか？')) {
+      history.pushState(null, '', currentPath);
+      return;
+    }
+    state.dirty = false;
+  }
+  currentPath = path;
+  document.querySelector('.modal-bg')?.remove();
+  const p = sitePath.split('/').filter(Boolean).map(decodeURIComponent);
+  if (!firstRender) window.scrollTo(0, 0);
+  const [a, b, c, d] = p;
+  if (a === 'mod' && b) await renderView('pages', b);
+  else if (a === 'edit' && b) await renderEdit('pages', b);
+  else if (a === 'new') await renderEdit('pages', b || '', { isNew: true });
+  else if (a === 'revert' && b) await renderEdit('pages', b, { revertFrom: +c });
+  else if (a === 'history' && b && c) await renderRevision('pages', b, +c);
+  else if (a === 'history' && b) await renderHistory('pages', b);
+  else if (a === 'articles' && b === 'new') await renderEdit('articles', c || '', { isNew: true });
+  else if (a === 'articles' && !b) renderArticles();
+  else if (a === 'article' && b && c === 'edit') await renderEdit('articles', b);
+  else if (a === 'article' && b && c === 'revert') await renderEdit('articles', b, { revertFrom: +d });
+  else if (a === 'article' && b && c === 'history' && d) await renderRevision('articles', b, +d);
+  else if (a === 'article' && b && c === 'history') await renderHistory('articles', b);
+  else if (a === 'article' && b && !c) await renderView('articles', b);
+  else if (a === 'search') await renderSearch();
+  else if (a === 'recent') await renderRecent();
+  else if (a === 'help') renderHelp();
+  else if (a === 'admin') await renderAdmin();
+  else if (a === 'drafts') renderDrafts();
+  else if (LISTS[a] && b) renderHome({ kind: a, value: b });
+  else if (!p.length) {
+    state.q = new URLSearchParams(location.search).get('q') || state.q;
+    renderHome();
+  } else {
+    setMeta(pageTitle('ページが見つかりません'));
+    app.innerHTML = `<div class="empty">ページが見つかりません。<br><br><a class="btn" href="${u('/')}">トップへ</a></div>`;
+  }
+  firstRender = false;
+  const top = a === 'article' ? 'articles' : a || '';
+  document.querySelectorAll('.site-header nav a').forEach(x => x.classList.toggle('on', x.getAttribute('href') === u(`/${top}`)));
+  const hq = document.querySelector('.header-search input');
+  if (hq && a !== 'search') hq.value = '';
+}
+
+// サイト内リンクはページ遷移せずに切り替える
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href]');
+  if (!a || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  const href = a.getAttribute('href');
+  if (a.target === '_blank' || !href.startsWith(config.base + '/') || href.startsWith('//') || /^\/(api|img)\//.test(appPath(href))) return;
+  e.preventDefault();
+  navigate(href);
+});
+// ヘッダーの検索欄
+document.addEventListener('submit', e => {
+  if (!e.target.matches('.header-search')) return;
+  e.preventDefault();
+  const q = e.target.q.value.trim();
+  navigate(q ? `/search?q=${encodeURIComponent(q)}` : '/search');
+});
+window.addEventListener('popstate', () => route());
+window.addEventListener('beforeunload', e => { if (state.dirty) e.preventDefault(); });
+
+(async () => {
+  // 古い #/mod/xxx 形式のURLを新しい形式に置き換える
+  if (location.hash.startsWith('#/')) history.replaceState(null, '', u(location.hash.slice(1)));
+  try { await Promise.all([loadData(), refreshSettings()]); } catch (e) {
+    // サーバーが描画した中身はそのまま残す（検索エンジンや一時的な通信エラーで消さない）
+    console.warn('データを読み込めませんでした', e);
+    return;
+  }
+  route();
+})();

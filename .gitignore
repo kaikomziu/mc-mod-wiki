@@ -1,0 +1,6 @@
+node_modules/
+.data/
+.env
+_site/
+# 移行用の一時ファイル（管理者の言葉や編集者の識別子を含むので公開しない）
+migration/
