@@ -10,10 +10,12 @@ import {
 const app = document.getElementById('app');
 const state = {
   mods: [], articles: [], q: '', version: '', loader: '', tags: [],
-  dirty: false, admin: false, editLocked: false, openReports: 0,
+  dirty: false, admin: false, editLocked: false, openReports: 0, account: null,
 };
 const USER_KEY = 'modwiki-user';
 const TOKEN_KEY = 'modwiki-admin';
+const SESSION_KEY = 'modwiki-session'; // アカウントのログイン
+const GUEST_KEY = 'modwiki-guest'; // ゲストとして作ったものを後で自分のものにするための、このブラウザのID
 const store = {
   get: k => { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
   set: (k, v) => { try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch { /* 保存できなくても続行 */ } },
@@ -52,7 +54,19 @@ setModResolver(key => {
 });
 
 /* ===== 共通 ===== */
-const authHeaders = () => (store.get(TOKEN_KEY) ? { 'x-admin-token': store.get(TOKEN_KEY) } : {});
+function guestId() {
+  let id = store.get(GUEST_KEY);
+  if (!id) { id = crypto.randomUUID(); store.set(GUEST_KEY, id); }
+  return id;
+}
+const authHeaders = () => ({
+  ...(store.get(TOKEN_KEY) ? { 'x-admin-token': store.get(TOKEN_KEY) } : {}),
+  ...(store.get(SESSION_KEY) ? { 'x-session': store.get(SESSION_KEY) } : {}),
+  'x-guest-id': guestId(),
+});
+const userHref = name => u(`/user/${encodeURIComponent(name)}`);
+// 履歴などの名前表示（アカウントならプロフィールへのリンク）
+const userLabel = e => (e.uid ? `<a class="user-link" href="${userHref(e.user)}">👤 ${esc(e.user)}</a>` : esc(e.user || ''));
 async function api(path, opts = {}) {
   const r = await fetch(config.api + path, { cache: 'no-store', ...opts, headers: { 'content-type': 'application/json', ...authHeaders(), ...opts.headers } });
   const data = await r.json().catch(() => ({}));
@@ -131,11 +145,16 @@ function openModal(title, html, onSubmit, { submitLabel = 'OK', wide = false } =
 async function refreshSettings() {
   try {
     const s = await api('/settings');
-    Object.assign(state, { editLocked: s.editLocked, admin: s.isAdmin, openReports: s.openReports || 0 });
+    Object.assign(state, { editLocked: s.editLocked, admin: s.isAdmin, openReports: s.openReports || 0, account: s.account || null });
     if (!s.isAdmin) store.set(TOKEN_KEY, '');
+    if (!s.account) store.set(SESSION_KEY, '');
   } catch { /* 取得できなくても閲覧は続行 */ }
   document.body.classList.toggle('is-admin', state.admin);
   updateDraftLink();
+  document.getElementById('account-link')?.remove();
+  document.querySelector('.site-header nav').insertAdjacentHTML('beforeend', state.account
+    ? `<a id="account-link" href="${userHref(state.account.name)}">👤 ${esc(state.account.name)}</a>`
+    : `<a id="account-link" href="${u('/login')}">ログイン</a>`);
   document.getElementById('admin-link')?.remove();
   if (state.admin) {
     document.querySelector('.site-header nav').insertAdjacentHTML('beforeend',
@@ -171,6 +190,70 @@ function openLogin() {
       toast('👑 管理者としてログインしました');
       if (!state.dirty) route();
     }, { submitLabel: 'ログイン' });
+}
+
+/* ===== アカウント ===== */
+function openAuth(mode = 'login') {
+  const signup = mode === 'signup';
+  const form = openModal(signup ? 'アカウントを作る' : 'ログイン', `
+    <div class="auth-tabs"><button type="button" class="${signup ? '' : 'on'}" data-mode="login">ログイン</button><button type="button" class="${signup ? 'on' : ''}" data-mode="signup">アカウントを作る</button></div>
+    <label class="field"><span>ユーザー名</span><input name="name" maxlength="20" required autocomplete="username" value="${esc(signup ? getUser() : '')}"></label>
+    <label class="field"><span>パスワード${signup ? ' <small>6文字以上</small>' : ''}</span><input name="password" type="password" minlength="6" required autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
+    ${signup ? '<label class="field"><span>パスワード（確認）</span><input name="password2" type="password" minlength="6" required autocomplete="new-password"></label>' : ''}
+    <input name="website" class="hp" tabindex="-1" aria-hidden="true">
+    <p class="muted small">${signup ? 'メールアドレスは不要です。' : ''}このブラウザでゲストとして作ったページや編集は、${signup ? '作成' : 'ログイン'}するとあなたのアカウントのものになります。</p>`,
+  async f => {
+    if (signup && f.password.value !== f.password2.value) throw new Error('パスワードが一致しません。');
+    const res = await api(`/account/${signup ? 'signup' : 'login'}`, {
+      method: 'POST', body: JSON.stringify({ name: f.name.value, password: f.password.value, website: f.website.value }),
+    });
+    store.set(SESSION_KEY, res.token);
+    setUser(res.account.name);
+    await Promise.all([refreshSettings(), loadData()]);
+    const c = res.claimed;
+    toast(`👤 ${res.account.name} で${signup ? 'アカウントを作りました' : 'ログインしました'}${c?.edits ? `（ゲストの編集${c.edits}件を引き継ぎ）` : ''}`);
+    if (!state.dirty) route();
+  }, { submitLabel: signup ? '作成する' : 'ログイン' });
+  form.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => openAuth(b.dataset.mode)));
+}
+
+async function logout() {
+  store.set(SESSION_KEY, '');
+  await refreshSettings();
+  toast('ログアウトしました');
+  navigate('/');
+}
+
+async function renderUser(name) {
+  loading();
+  let p;
+  try { p = await api(`/users/${encodeURIComponent(name)}`); } catch (e) { app.innerHTML = errorBox(e); return; }
+  const me = state.account?.uid === p.uid;
+  setMeta(pageTitle(`${p.name} さんのページ`));
+  app.innerHTML = `
+    <div class="page-head">
+      <div><h1 class="page-title">👤 ${esc(p.name)}</h1>
+      <p class="lead">${fmt(p.createdAt)} にアカウント作成 ・ 編集 ${p.editCount} 回 ・ 作ったページ ${p.created.length} 件</p></div>
+      ${me ? '<div class="btns"><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>' : ''}
+    </div>
+    <div class="admin-grid">
+      <section class="panel">
+        <h2>作ったページ <small>${p.created.length}件</small></h2>
+        ${p.created.length ? `<ul>${p.created.map(c => `<li><a href="${KINDS[c.col].view(c.slug)}">${esc(c.name)}</a>${c.col === 'articles' ? ' <span class="badge">記事</span>' : ''} <span class="muted small">${fmt(c.at)}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
+      </section>
+      <section class="panel">
+        <h2>最近の編集 <small>${p.editCount}件</small></h2>
+        ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
+      </section>
+    </div>`;
+  app.querySelector('[data-logout]')?.addEventListener('click', logout);
+  app.querySelector('[data-claim]')?.addEventListener('click', async () => {
+    try {
+      const { claimed } = await api('/account/claim', { method: 'POST' });
+      toast(claimed.edits ? `ゲストの編集${claimed.edits}件を引き継ぎました` : '引き継ぐ編集はありませんでした');
+      if (claimed.edits) { await loadData(); route(); }
+    } catch (e) { alert(e.message); }
+  });
 }
 
 /* ===== 通報 ===== */
@@ -595,7 +678,9 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
       </section>
       <section class="panel save-panel">
         <div class="fields">
-          <label class="field"><span>ユーザー名 <b class="req">必須</b><small>履歴に表示されます</small></span><input name="user" maxlength="24" required value="${esc(getUser())}"></label>
+          ${state.account
+            ? `<div class="field"><span>編集者</span><div class="as-account">👤 <strong>${esc(state.account.name)}</strong> として保存されます</div><input type="hidden" name="user" value="${esc(state.account.name)}"></div>`
+            : `<label class="field"><span>ユーザー名 <b class="req">必須</b><small>履歴に表示されます ・ <a href="${u('/login')}" data-open-login>ログイン / アカウント作成</a></small></span><input name="user" maxlength="24" required value="${esc(getUser())}"></label>`}
           <label class="field"><span>編集内容の要約</span><input name="comment" maxlength="120" value="${esc(src.comment ?? (revertFrom ? `版 ${revertFrom} に差し戻し` : ''))}" placeholder="例: 導入方法を追記"></label>
           <input name="website" class="hp" tabindex="-1" aria-hidden="true">
         </div>
@@ -815,7 +900,7 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
       downloads: Number(form.downloads.value) || 0, downloadsAt: form.downloadsAt.value,
       user: form.user.value, comment: form.comment.value, website: form.website.value, baseRev: rev,
     };
-    setUser(payload.user.trim());
+    if (!state.account) setUser(payload.user.trim());
     const btn = form.querySelector('[type=submit]');
     btn.disabled = true; btn.textContent = '公開中…';
     try {
@@ -931,7 +1016,7 @@ async function renderHistory(col, slug) {
         <tr>
           <td>${l.rev}${l.rev === m.rev ? ' <span class="badge">最新</span>' : ''}</td>
           <td class="nowrap">${fmt(l.at)}</td>
-          <td>${esc(l.user)}${crown(l)}${banBtn(l)}</td>
+          <td>${userLabel(l)}${crown(l)}${banBtn(l)}</td>
           <td>${esc(l.comment) || '<span class="muted">—</span>'}</td>
           <td>${delta(l.delta)}</td>
           <td class="nowrap"><a href="${K.hist(slug)}/${l.rev}">差分・表示</a></td>
@@ -960,7 +1045,7 @@ async function renderRevision(col, slug, rev) {
         ${rev < cur.rev && canEdit(cur) ? `<a class="btn primary" href="${K.revert(slug, rev)}">この版に戻す</a>` : ''}
       </div>
     </div>
-    <p class="rev-meta">${fmt(snap.at)} ・ <strong>${esc(snap.user)}</strong>${crown(snap)}${banBtn(snap)}${snap.comment ? ` ・ 「${esc(snap.comment)}」` : ''} ${delta(snap.delta)}</p>
+    <p class="rev-meta">${fmt(snap.at)} ・ <strong>${userLabel(snap)}</strong>${crown(snap)}${banBtn(snap)}${snap.comment ? ` ・ 「${esc(snap.comment)}」` : ''} ${delta(snap.delta)}</p>
     <div class="editor-tabs rev-tabs"><button type="button" class="on" data-v="diff">差分（版 ${rev - 1 || 'なし'} → ${rev}）</button><button type="button" data-v="page">この版の表示</button></div>
     <div class="rev-pane" data-v="diff">${rev === 1 ? '<p class="muted">最初の版です（ページ作成）。</p>' : ''}${diffView(prev, snap)}</div>
     <div class="rev-pane" data-v="page" hidden>${pageView(snap, col)}</div>`;
@@ -995,7 +1080,7 @@ async function renderRecent() {
         <a href="${K(r).view(r.slug)}"><strong>${esc(r.name)}</strong></a>${kindBadge(r)}
         ${r.isNew ? '<span class="badge new">新規</span>' : ''}
         <a class="muted" href="${K(r).hist(r.slug)}/${r.rev}">（差分）</a>
-        ${delta(r.delta)} ・ ${esc(r.user)}${crown(r)}${banBtn(r)}${r.comment ? ` <span class="muted">「${esc(r.comment)}」</span>` : ''}
+        ${delta(r.delta)} ・ ${userLabel(r)}${crown(r)}${banBtn(r)}${r.comment ? ` <span class="muted">「${esc(r.comment)}」</span>` : ''}
       </li>`).join('') || '<li class="muted">まだ更新はありません。</li>'}</ul>`;
   bindBanButtons();
 }
@@ -1040,6 +1125,13 @@ async function renderAdmin() {
           : '<p class="muted">ありません。履歴や最近の更新の「🚫 ブロック」から追加できます。</p>'}
       </section>
       <section class="panel">
+        <h2>名前でアカウントに紐付け</h2>
+        <p class="muted small">ゲストIDが無かった頃（アカウント機能より前）の編集を、入力したユーザー名ごとアカウントのものにします。</p>
+        <form class="attribute-form">
+          <div class="input-with-btn"><input name="fromName" placeholder="履歴の名前（例: かるわか）" required maxlength="24"><input name="account" placeholder="アカウント名" required maxlength="20"><button class="btn">紐付け</button></div>
+        </form>
+      </section>
+      <section class="panel">
         <h2>削除したページ <small>${s.deleted.length}件</small></h2>
         ${s.deleted.length ? `<ul>${s.deleted.map(p => `<li>${esc(p.name)}${p.col === 'articles' ? ' <span class="badge">記事</span>' : ''} <span class="muted">${fmt(p.deletedAt)}</span> <button class="linkish" data-restore="${p.col}/${p.slug}">復元</button></li>`).join('')}</ul>`
           : '<p class="muted">ありません。</p>'}
@@ -1058,6 +1150,16 @@ async function renderAdmin() {
     await refreshSettings();
     toast('ログアウトしました');
     navigate('/');
+  });
+  app.querySelector('.attribute-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    if (!confirm(`履歴の「${f.fromName.value}」名義の編集（アカウント無しのもの）を、アカウント「${f.account.value}」のものにしますか？`)) return;
+    try {
+      const r = await api('/admin/attribute', { method: 'POST', body: JSON.stringify({ fromName: f.fromName.value, account: f.account.value }) });
+      toast(`${r.edits}件の編集（${r.pages}ページ）を紐付けました`);
+      await loadData();
+    } catch (err) { alert(err.message); }
   });
   app.querySelector('[data-sitelock]').addEventListener('click', () =>
     adminAction('/admin/settings', 'POST', { editLocked: !s.settings.editLocked }, s.settings.editLocked ? '編集を再開しました' : '編集を停止しました'));
@@ -1190,6 +1292,11 @@ async function route() {
   else if (a === 'help') renderHelp();
   else if (a === 'admin') await renderAdmin();
   else if (a === 'drafts') renderDrafts();
+  else if (a === 'user' && b) await renderUser(b);
+  else if (a === 'login') {
+    if (state.account) navigate(userHref(state.account.name));
+    else { renderHome(); history.replaceState(null, '', u('/')); openAuth('login'); }
+  }
   else if (LISTS[a] && b) renderHome({ kind: a, value: b });
   else if (!p.length) {
     state.q = new URLSearchParams(location.search).get('q') || state.q;
@@ -1214,6 +1321,14 @@ document.addEventListener('click', e => {
   e.preventDefault();
   navigate(href);
 });
+// 「ログイン」リンクはページ移動せずにダイアログを開く
+document.addEventListener('click', e => {
+  const a = e.target.closest('#account-link, [data-open-login]');
+  if (!a || state.account || e.ctrlKey || e.metaKey) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  openAuth('login');
+}, true);
 // ヘッダーの検索欄
 document.addEventListener('submit', e => {
   if (!e.target.matches('.header-search')) return;

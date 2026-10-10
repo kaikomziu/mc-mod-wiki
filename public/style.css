@@ -413,3 +413,13 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .draft-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .draft-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
 .nav-badge.muted-badge { background: rgba(255,255,255,.3); color: inherit; }
+
+/* アカウント */
+.auth-tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--accent-soft); margin-bottom: 4px; }
+.auth-tabs button { font: inherit; font-size: 14px; padding: 6px 14px; cursor: pointer; border: 0; background: none; color: var(--muted); border-radius: 6px 6px 0 0; }
+.auth-tabs button.on { background: var(--accent-soft); color: var(--text); font-weight: 700; }
+.as-account { padding: 8px 10px; border-radius: 6px; background: var(--accent-soft); font-size: 14px; }
+.user-link { text-decoration: none; font-weight: 500; }
+.user-link:hover { text-decoration: underline; }
+.attribute-form .input-with-btn { flex-wrap: wrap; }
+.attribute-form input { font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 0; flex: 1 1 120px; }

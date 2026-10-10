@@ -68,7 +68,7 @@ async function getEnv() {
 
 const CORS = {
   'access-control-allow-origin': '*',
-  'access-control-allow-headers': 'content-type, x-admin-token',
+  'access-control-allow-headers': 'content-type, x-admin-token, x-session, x-guest-id',
   'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'access-control-max-age': '86400',
 };
