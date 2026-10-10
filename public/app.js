@@ -153,7 +153,7 @@ async function refreshSettings() {
   updateDraftLink();
   document.getElementById('account-link')?.remove();
   document.querySelector('.site-header nav').insertAdjacentHTML('beforeend', state.account
-    ? `<a id="account-link" href="${userHref(state.account.name)}">👤 ${esc(state.account.name)}</a>`
+    ? `<a id="account-link" href="${userHref(state.account.name)}">${avatarHtml(state.account, 'nav-avatar')} ${esc(state.account.name)}</a>`
     : `<a id="account-link" href="${u('/login')}">ログイン</a>`);
   document.getElementById('admin-link')?.remove();
   if (state.admin) {
@@ -243,7 +243,10 @@ async function renderUser(name) {
   const nArticles = p.created.length - nMods;
   app.innerHTML = `
     <section class="profile-head">
-      <div class="profile-avatar" aria-hidden="true">${esc([...p.name][0] || '?')}</div>
+      <div class="profile-avatar-wrap">
+        ${avatarHtml(p, 'profile-avatar')}
+        ${me ? `<div class="avatar-actions"><button type="button" class="linkish small" data-avatar-change>📷 アイコンを変更</button>${p.avatar ? '<button type="button" class="linkish small muted" data-avatar-remove>外す</button>' : ''}</div>` : ''}
+      </div>
       <div class="profile-main">
         <h1 class="page-title">${esc(p.name)}</h1>
         <p class="muted small">${fmt(p.createdAt)} から参加 ・ 編集 ${p.editCount} 回 ・ MODページ ${nMods} ・ 記事 ${nArticles}</p>
@@ -269,6 +272,26 @@ async function renderUser(name) {
       <h2>最近の編集 <small>${p.editCount}件</small></h2>
       ${p.edits.length ? `<ul>${p.edits.slice(0, 50).map(e => `<li><a href="${KINDS[e.col].view(e.slug)}">${esc(e.name)}</a> <a class="muted small" href="${KINDS[e.col].hist(e.slug)}/${e.rev}">版${e.rev}</a> ${delta(e.delta)} <span class="muted small">${fmt(e.at)}${e.comment ? ` ・ ${esc(e.comment)}` : ''}</span></li>`).join('')}</ul>` : '<p class="muted">まだありません。</p>'}
     </section>`;
+  // アイコンの変更・取り外し
+  const saveAvatar = async avatar => {
+    const res = await api('/account/profile', { method: 'POST', body: JSON.stringify({ avatar }) });
+    state.account = { ...state.account, avatar: res.avatar };
+    await refreshSettings();
+    toast(avatar ? 'アイコンを変更しました' : 'アイコンを外しました');
+    route();
+  };
+  app.querySelector('[data-avatar-change]')?.addEventListener('click', async e => {
+    const file = await pickFile();
+    if (!file) return;
+    const btn = e.target;
+    btn.disabled = true; btn.textContent = 'アップロード中…';
+    try { await saveAvatar(await uploadAvatar(file)); } catch (err) { alert(err.message); btn.disabled = false; btn.textContent = '📷 アイコンを変更'; }
+  });
+  app.querySelector('[data-avatar-remove]')?.addEventListener('click', async () => {
+    if (!confirm('アイコンを外しますか？')) return;
+    try { await saveAvatar(''); } catch (err) { alert(err.message); }
+  });
+
   // 自己紹介の編集
   const bioForm = app.querySelector('.bio-form');
   if (bioForm) {
@@ -336,6 +359,32 @@ async function compressImage(file) {
     if (blob && blob.type === type && blob.size <= 3e6) return blob;
   }
   throw new Error('画像が大きすぎます。');
+}
+
+// アイコン（画像が無ければ名前の頭文字）
+function avatarHtml(acc, cls) {
+  return acc?.avatar
+    ? `<img class="${cls}" src="${esc(acc.avatar)}" alt="">`
+    : `<span class="${cls} avatar-letter" aria-hidden="true">${esc([...(acc?.name || '?')][0])}</span>`;
+}
+
+// アイコン用に中央を正方形に切り抜いて 256px に縮小してアップロード
+async function uploadAvatar(file) {
+  if (!/^image\//.test(file.type)) throw new Error('画像ファイルを選んでください。');
+  const bmp = await createImageBitmap(file);
+  const side = Math.min(bmp.width, bmp.height);
+  const canvas = Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, 256, 256);
+  let blob = await new Promise(r => canvas.toBlob(r, 'image/webp', 0.9));
+  if (!blob || blob.type !== 'image/webp') blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+  const r = await fetch(`${config.api}/images?user=${encodeURIComponent(state.account?.name || '')}`, {
+    method: 'POST', body: blob, headers: { 'content-type': blob.type, ...authHeaders() },
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'アップロードに失敗しました。');
+  return data.url;
 }
 
 async function uploadImage(file) {
