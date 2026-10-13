@@ -1609,6 +1609,11 @@ async function renderAdmin() {
           <button class="linkish" data-news-edit="${n.id}">編集</button><button class="linkish danger-text" data-news-del="${n.id}">削除</button></li>`).join('')}</ul>`
         : '<p class="muted">まだありません。</p>'}
     </section>
+    <section class="panel backup-panel">
+      <h2>💾 バックアップ <small>ページ・記事・履歴・アカウント・コメント・お問い合わせなどを、まとめて1つのファイル（JSON）に保存します</small></h2>
+      <p class="muted small">⚠ アカウントのメールアドレスや（暗号化した）パスワードも入るので、ファイルは人に渡さず大切に保管してください。画像そのものは入りません（画像のURL一覧は入ります）。</p>
+      <div class="btns"><button type="button" class="btn primary" data-backup>💾 バックアップをダウンロード</button><span class="muted small backup-result"></span></div>
+    </section>
     <section class="panel users-panel">
       <h2>👥 ユーザー一覧 <small class="users-count">読み込み中…</small></h2>
       <input class="users-filter" type="search" placeholder="名前・メールアドレス・肩書きで絞り込み">
@@ -1737,6 +1742,28 @@ async function renderAdmin() {
     adminAction('/admin/unban', 'POST', { ipHash: b.dataset.unban }, 'ブロックを解除しました')));
   app.querySelectorAll('[data-restore]').forEach(b => b.addEventListener('click', () =>
     adminAction(`/${b.dataset.restore}/restore`, 'POST', null, '復元しました')));
+  // バックアップのダウンロード
+  app.querySelector('[data-backup]').addEventListener('click', async e => {
+    const btn = e.currentTarget;
+    const out = app.querySelector('.backup-result');
+    btn.disabled = true;
+    out.textContent = '作成中…';
+    try {
+      const data = await api('/admin/backup');
+      const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
+      const t = new Date(data.createdAt);
+      const p2 = n => String(n).padStart(2, '0');
+      const stamp = `${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}-${p2(t.getHours())}${p2(t.getMinutes())}`;
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `mc-mod-wiki-backup-${stamp}.json` });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+      const c = data.counts;
+      out.textContent = `✓ 保存しました（MOD ${c.pages || 0}・記事 ${c.articles || 0}・履歴 ${(c.history || 0) + (c.ahistory || 0)}・アカウント ${c.accounts || 0}・全${Object.keys(data.entries).length}件、${Math.ceil(blob.size / 1024)}KB）`;
+    } catch (err) { out.textContent = ''; alert(err.message); }
+    btn.disabled = false;
+  });
   // ユーザー一覧（あとから読み込む）
   api('/admin/users').then(users => {
     const panel = app.querySelector('.users-panel');
