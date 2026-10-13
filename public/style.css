@@ -547,3 +547,20 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .users-table td { vertical-align: top; }
 .users-table td:nth-child(3), .users-table td:nth-child(4) { text-align: right; }
 .users-panel .table-wrap { max-height: 520px; overflow: auto; }
+
+/* LINEオープンチャット */
+.openchat-banner { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 10px 14px; border-radius: 12px; background: #e9f9ee; border: 2px solid #06c755; color: #0b3d1e; text-decoration: none; }
+.openchat-banner:hover { background: #d8f5e2; }
+.oc-badge { flex: none; background: #06c755; color: #fff; font-weight: 800; font-size: 13px; padding: 6px 8px; border-radius: 8px; letter-spacing: .5px; }
+.oc-text { display: grid; gap: 2px; min-width: 0; }
+.oc-text b { font-size: 15px; overflow-wrap: anywhere; }
+.oc-text small { color: #2c6b43; font-size: 12.5px; }
+.oc-go { margin-left: auto; flex: none; font-weight: 700; color: #06a346; white-space: nowrap; }
+@media (max-width: 520px) { .oc-go { display: none; } }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .openchat-banner { background: #0f2a1a; color: #d9f7e4; }
+  :root:not([data-theme="light"]) .oc-text small { color: #9fd9b5; }
+  :root:not([data-theme="light"]) .openchat-banner:hover { background: #143522; }
+}
+:root[data-theme="dark"] .openchat-banner { background: #0f2a1a; color: #d9f7e4; }
+:root[data-theme="dark"] .oc-text small { color: #9fd9b5; }

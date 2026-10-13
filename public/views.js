@@ -1,7 +1,7 @@
 // ページ本体・カードのHTML（サーバー側の事前描画とブラウザの両方で使う）
 import { esc, safeUrl, inline, renderMarkdown } from './markdown.js';
 import { listPath } from './seo.js';
-import { u } from './paths.js';
+import { u, OPENCHAT } from './paths.js';
 
 export const fmt = iso => new Date(iso).toLocaleString('ja-JP', {
   timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
@@ -97,6 +97,11 @@ export function homeIntro({ mods, articles, canEdit = true }) {
           <a class="btn" href="${u('/articles')}">📝 まとめ記事を読む</a>
           <a class="btn" href="${u('/help')}">✏️ 書き方を見る</a>
         </div>
+        <a class="openchat-banner" href="${esc(OPENCHAT.url)}" target="_blank" rel="noopener">
+          <span class="oc-badge">LINE</span>
+          <span class="oc-text"><b>オープンチャット「${esc(OPENCHAT.name)}」</b><small>Wikiづくりの相談・MODの質問・雑談はこちら！だれでも参加OK</small></span>
+          <span class="oc-go">参加する →</span>
+        </a>
       </div>
       <ul class="hero-points">
         <li><span class="hp-icon">🔍</span><div><b>探す</b>バージョン・ローダー・ジャンルで絞り込み。本文まで検索できます。</div></li>

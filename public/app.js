@@ -1,5 +1,5 @@
 import { VERSIONS, LOADERS, TAGS } from './tags.js';
-import { config, u, appPath } from './paths.js';
+import { config, u, appPath, OPENCHAT } from './paths.js';
 import { TITLES, MAX_TITLES, titleLabel } from './titles.js';
 import { esc, inline, renderMarkdown, setModResolver, videoInfo } from './markdown.js';
 import { fmt, KINDS, card, pageView, formatDownloads, homeIntro } from './views.js';
@@ -787,7 +787,8 @@ function renderContact() {
   app.innerHTML = `
     <h1 class="page-title">📮 運営へのお問い合わせ</h1>
     <p class="lead">質問・要望・不具合の報告などはこちらからどうぞ。内容は運営（管理者）だけが見られます。</p>
-    <p class="muted small">特定のページの荒らし・間違いは、そのページ下の「🚩 このページを通報」からも送れます。</p>
+    <p class="muted small">特定のページの荒らし・間違いは、そのページ下の「🚩 このページを通報」からも送れます。<br>
+      気軽な質問や相談は、LINEオープンチャット<a href="${esc(OPENCHAT.url)}" target="_blank" rel="noopener">「${esc(OPENCHAT.name)}」</a>でもどうぞ。</p>
     <form class="panel contact-form">
       <label class="field"><span>種類</span>
         <select name="type">${CONTACT_TYPES.map(t => `<option>${t}</option>`).join('')}</select></label>

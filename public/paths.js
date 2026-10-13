@@ -20,3 +20,6 @@ export const u = path => config.base + path;
 export const abs = path => config.site + u(path);
 // 表示中のURLからフォルダ部分を外したパス
 export const appPath = pathname => (config.base && pathname.startsWith(config.base) ? pathname.slice(config.base.length) || '/' : pathname);
+
+// 公式LINEオープンチャット
+export const OPENCHAT = { name: 'マイクラJava MODサイト作ろう！！', url: 'https://line.me/ti/g2/-FZn7f2t2c97E_I3STl4FxaIDHouNX1Lhdf-Uw' };
