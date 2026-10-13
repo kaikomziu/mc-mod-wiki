@@ -816,6 +816,63 @@ function renderContact() {
   });
 }
 
+/* ===== サイトルール ===== */
+function renderRules() {
+  setMeta(pageTitle('サイトルール'), 'Minecraft MOD Wiki を使うときのルール（ダウンロードリンク・転載・宣伝・マナー・違反したときの対応）です。');
+  app.innerHTML = `
+    <h1 class="page-title">📜 サイトルール</h1>
+    <p class="lead">みんなが気持ちよく使えるWikiにするためのルールです。編集・コメント・お問い合わせをする前に読んでください。</p>
+    <div class="md rules">
+      <h2>1. ダウンロードリンクは公式だけ</h2>
+      <ul>
+        <li>MODの配布ページへのリンクは、<strong>CurseForge・Modrinth・作者のGitHubや公式サイト</strong>だけにしてください。</li>
+        <li>転載サイト・非公式の再配布・ファイルを直接置いたリンクは<strong>禁止</strong>です（ウイルスや作者の収入を奪うことにつながります）。</li>
+      </ul>
+      <h2>2. 文章は自分の言葉で</h2>
+      <ul>
+        <li>ほかのWiki・ブログ・動画の説明などを<strong>そのままコピーして貼るのは禁止</strong>です。</li>
+        <li>英語などの<strong>公式の説明を日本語に翻訳して載せるのはOK</strong>です。その場合は、元のページのURL（出典）を書いてください。</li>
+        <li>画像は、自分で撮ったスクリーンショットか、MODの公式ページの画像を使ってください。</li>
+      </ul>
+      <h2>3. AIで書いた文章</h2>
+      <ul>
+        <li>ChatGPTなどのAIを使って書いてもOKです。ただし<strong>内容が正しいか、自分で確かめてから</strong>公開してください。</li>
+        <li>間違いだらけの文章は、削除・差し戻しすることがあります。</li>
+      </ul>
+      <h2>4. チート系MOD</h2>
+      <ul>
+        <li>X-rayなどのチート系MODは、<strong>シングルプレイで使う前提なら解説してOK</strong>です。</li>
+        <li>マルチサーバーで悪用する方法や、ほかの人に迷惑をかける使い方の解説は<strong>禁止</strong>です。</li>
+        <li>多くのサーバーで禁止されているMODには「サーバーによっては使用禁止」と書いてください。</li>
+      </ul>
+      <h2>5. 宣伝</h2>
+      <ul>
+        <li>自分のYouTube・Discord・サーバーなどの紹介は、<strong>そのページの内容に関係があればOK</strong>です（例：そのMODの紹介動画）。</li>
+        <li>関係のない宣伝・勧誘・同じ宣伝のくり返しは<strong>禁止</strong>です。</li>
+      </ul>
+      <h2>6. マナー</h2>
+      <ul>
+        <li><strong>悪口・荒らし禁止：</strong>ほかの人やMOD作者への悪口、攻撃的な言葉、意味のない書き込みや連投、ページを壊す編集はやめましょう。</li>
+        <li><strong>個人情報禁止：</strong>本名・住所・学校名・電話番号・SNSの裏アカウントなどは、自分のものも他人のものも書かないでください。</li>
+        <li><strong>ネタバレ配慮：</strong>ボスや隠し要素など、知らずに遊びたい人がいる内容は、見出しや文の最初に「⚠ ネタバレあり」と書いてください。</li>
+      </ul>
+      <h2>7. ルールを破ったとき</h2>
+      <ol>
+        <li>まず、その書き込みや編集を<strong>削除・差し戻し</strong>します。</li>
+        <li>くり返す場合は<strong>注意</strong>します。</li>
+        <li>それでも続ける場合は<strong>ブロック</strong>（編集・コメントができなくなる）します。</li>
+      </ol>
+      <p>荒らし・悪質な宣伝・個人情報の書き込み・危険なリンクなど、<strong>悪質なものは注意なしですぐにブロック</strong>します。</p>
+      <h2>8. 困ったとき・見つけたとき</h2>
+      <ul>
+        <li>ルール違反を見つけたら、ページ下の「🚩 このページを通報」から教えてください。</li>
+        <li>質問・相談は<a href="${u('/contact')}">運営へのお問い合わせ</a>か、LINEオープンチャット<a href="${esc(OPENCHAT.url)}" target="_blank" rel="noopener">「${esc(OPENCHAT.name)}」</a>へどうぞ。</li>
+      </ul>
+      <p class="muted small">このルールは、必要に応じて変更することがあります。大きく変わるときは<a href="${u('/news')}">お知らせ</a>で伝えます。<br>
+        Minecraft MOD Wiki は非公式のファンサイトで、Mojang・Microsoft とは関係ありません。</p>
+    </div>`;
+}
+
 /* ===== 検索 ===== */
 async function renderSearch() {
   const q = new URLSearchParams(location.search).get('q') || '';
@@ -1152,6 +1209,7 @@ async function renderEdit(col, slug, { isNew = false, revertFrom = null } = {}) 
             <small class="muted">${canSet ? '（あとから変えられるのは、このページを作った人と管理者だけです）' : '（このページを作った人と管理者だけが変えられます）'}</small></label>`;
         })()}
         <div class="form-error" role="alert"></div>
+        <p class="muted small rules-note">📜 公開する前に<a href="${u('/rules')}" target="_blank">サイトルール</a>を確認してね（ダウンロードリンクは公式だけ・丸写し禁止・宣伝は関係あるものだけ）。</p>
         <div class="save-row">
           <span class="draft-status muted small">下書きはこのブラウザに保存されます（30秒ごとに自動保存）</span>
           <div class="btns">
@@ -1853,6 +1911,7 @@ function renderHelp() {
   app.innerHTML = `
     <h1 class="page-title">書き方</h1>
     <p class="lead">各ページの「✏️ 編集」から、だれでも編集できます。編集画面のボタンでも入力できます。</p>
+    <p class="notice">📜 編集する前に<a href="${u('/rules')}">サイトルール</a>を読んでください（リンクは公式だけ・丸写し禁止 など）。</p>
     <div class="md">
       <div class="table-wrap"><table class="help-table">
         <thead><tr><th>用途</th><th>書き方</th><th>表示</th></tr></thead>
@@ -1916,6 +1975,7 @@ async function route() {
   else if (a === 'article' && b && !c) await renderView('articles', b);
   else if (a === 'search') await renderSearch();
   else if (a === 'news') await renderNews();
+  else if (a === 'rules') renderRules();
   else if (a === 'contact') renderContact();
   else if (a === 'recent') await renderRecent();
   else if (a === 'help') renderHelp();

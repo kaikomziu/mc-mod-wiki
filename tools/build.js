@@ -33,7 +33,7 @@ await fs.cp(path.join(ROOT, 'public'), OUT, { recursive: true });
 await fs.writeFile(path.join(OUT, '.nojekyll'), ''); // _ で始まるファイルもそのまま配信させる
 
 // 書き出すページ（/mod/jei → mod/jei.html。GitHub Pages は拡張子なしでも .html を返す）
-const routes = new Set(['/', '/articles', '/help', '/recent', '/news', '/contact', '/sitemap.xml']);
+const routes = new Set(['/', '/articles', '/help', '/recent', '/news', '/contact', '/rules', '/sitemap.xml']);
 for (const p of pages) routes.add(appPath(modHref(p.slug)));
 for (const a of articles) routes.add(appPath(KINDS.articles.view(a.slug)));
 for (const [kind, def] of Object.entries(LISTS)) {

@@ -575,3 +575,8 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 .oc-close { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: #fff; font-size: 22px; line-height: 1; cursor: pointer; }
 .oc-close:hover, .oc-close:focus-visible { background: rgba(255,255,255,.2); }
 @media (max-width: 600px) { .oc-bar-sub { display: none; } .openchat-bar { font-size: 13px; justify-content: flex-start; } }
+
+/* サイトルール */
+.rules h2 { margin-top: 26px; padding-bottom: 4px; border-bottom: 2px solid var(--border); }
+.rules li { margin: 4px 0; }
+.rules-note { margin: 4px 0 10px; }
