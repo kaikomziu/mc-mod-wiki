@@ -564,3 +564,14 @@ table.history, table.meta-diff { border-collapse: collapse; width: 100%; backgro
 }
 :root[data-theme="dark"] .openchat-banner { background: #0f2a1a; color: #d9f7e4; }
 :root[data-theme="dark"] .oc-text small { color: #9fd9b5; }
+
+/* 画面上のオープンチャットのお知らせ（×で閉じられる） */
+.openchat-bar { display: flex; align-items: center; justify-content: center; gap: 8px; background: #06c755; color: #fff; padding: 6px 44px 6px 12px; position: relative; font-size: 14px; }
+.openchat-bar a { display: inline-flex; align-items: center; gap: 8px; color: #fff; text-decoration: none; min-width: 0; }
+.openchat-bar a:hover { text-decoration: underline; }
+.openchat-bar .oc-badge { background: #fff; color: #06a346; font-size: 11px; padding: 2px 6px; border-radius: 6px; }
+.openchat-bar b { overflow-wrap: anywhere; }
+.oc-bar-sub { margin-left: 8px; opacity: .9; font-size: 12.5px; }
+.oc-close { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: #fff; font-size: 22px; line-height: 1; cursor: pointer; }
+.oc-close:hover, .oc-close:focus-visible { background: rgba(255,255,255,.2); }
+@media (max-width: 600px) { .oc-bar-sub { display: none; } .openchat-bar { font-size: 13px; justify-content: flex-start; } }

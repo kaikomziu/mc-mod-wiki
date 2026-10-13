@@ -1941,7 +1941,22 @@ document.addEventListener('submit', e => {
 window.addEventListener('popstate', () => route());
 window.addEventListener('beforeunload', e => { if (state.dirty) e.preventDefault(); });
 
+// 画面上のオープンチャットのお知らせ。×で閉じたら、このブラウザではもう出さない
+const OPENCHAT_CLOSED_KEY = 'modwiki-openchat-closed';
+function showOpenchatBar() {
+  if (store.get(OPENCHAT_CLOSED_KEY) || document.getElementById('openchat-bar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'openchat-bar';
+  bar.className = 'openchat-bar';
+  bar.innerHTML = `<a href="${esc(OPENCHAT.url)}" target="_blank" rel="noopener"><span class="oc-badge">LINE</span>
+      <span>オープンチャット<b>「${esc(OPENCHAT.name)}」</b>に参加しよう！<span class="oc-bar-sub">相談・質問・雑談なんでもOK</span></span></a>
+    <button type="button" class="oc-close" aria-label="閉じる（もう表示しない）" title="閉じる（もう表示しない）">×</button>`;
+  bar.querySelector('.oc-close').addEventListener('click', () => { store.set(OPENCHAT_CLOSED_KEY, '1'); bar.remove(); });
+  document.querySelector('.site-header')?.after(bar);
+}
+
 (async () => {
+  showOpenchatBar();
   // 古い #/mod/xxx 形式のURLを新しい形式に置き換える
   if (location.hash.startsWith('#/')) history.replaceState(null, '', u(location.hash.slice(1)));
   try { await Promise.all([loadData(), refreshSettings()]); } catch (e) {
