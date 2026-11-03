@@ -205,34 +205,63 @@ function openLogin() {
     }, { submitLabel: 'ログイン' });
 }
 
-/* ===== アカウント ===== */
-function openAuth(mode = 'login') {
-  const signup = mode === 'signup';
-  const form = openModal(signup ? 'アカウントを作る' : 'ログイン', `
-    <div class="auth-tabs"><button type="button" class="${signup ? '' : 'on'}" data-mode="login">ログイン</button><button type="button" class="${signup ? 'on' : ''}" data-mode="signup">アカウントを作る</button></div>
-    <label class="field"><span>${signup ? 'ユーザー名' : 'ユーザー名 または メールアドレス'}</span><input name="name" maxlength="${signup ? 20 : 120}" required autocomplete="username" value="${esc(signup ? getUser() : '')}"></label>
-    ${signup ? '<label class="field"><span>メールアドレス <small>任意・本物でなくてもOK（ログインに使えます）</small></span><input name="email" type="email" maxlength="120" autocomplete="email" placeholder="例: steve@example.com"></label>' : ''}
-    <label class="field"><span>パスワード${signup ? ' <small>6文字以上</small>' : ''}</span><input name="password" type="password" minlength="6" required autocomplete="${signup ? 'new-password' : 'current-password'}"></label>
-    ${signup ? '<label class="field"><span>パスワード（確認）</span><input name="password2" type="password" minlength="6" required autocomplete="new-password"></label>' : ''}
-    <input name="website" class="hp" tabindex="-1" aria-hidden="true">
-    <p class="muted small">${signup ? 'メールアドレスは不要です。' : ''}このブラウザでゲストとして作ったページや編集は、${signup ? '作成' : 'ログイン'}するとあなたのアカウントのものになります。</p>`,
+/* ===== アカウント(かるわかGAMESアカウント) ===== */
+// ログインは、かるわかGAMES共通のアカウント。以前のWikiアカウント(ユーザー名+パスワード)は、ログイン後に「引き継ぎ」で紐づけられる。
+async function kaApi(body) {
+  return api('/account/ka', { method: 'POST', body: JSON.stringify({ kaToken: window.KaAccount.token(), website: '', ...body }) });
+}
+async function finishLogin(res, message) {
+  store.set(SESSION_KEY, res.token);
+  setUser(res.account.name);
+  await Promise.all([refreshSettings(), loadData()]);
+  const c = res.claimed;
+  toast(`👤 ${res.account.name} ${message}${c?.edits ? `（ゲストの編集${c.edits}件を引き継ぎ）` : ''}`);
+  if (!state.dirty) route();
+}
+async function openAuth() {
+  if (!window.KaAccount) { toast('かるわかGAMESアカウントを読み込めませんでした。ページを読み込み直してください'); return; }
+  if (!(await window.KaAccount.requireLogin())) return;
+  try {
+    const r = await kaApi({ action: 'status' });
+    if (r.token) { await finishLogin(r, 'でログインしました'); return; }
+    openKaChoice(r.display);
+  } catch (err) { toast(err.message); }
+}
+// 初めて: 新しく始めるか、以前のWikiアカウントを引き継ぐか(ログイン中の旧アカウントがあれば、そのまま引き継ぐ選択肢も出す)
+function openKaChoice(display) {
+  const hasCurrent = !!state.account && !state.account.ka;
+  const form = openModal('はじめてのログインです', `
+    <p class="muted small">「${esc(display || '')}」でログインしました。このWikiを使うのは初めてですか？</p>
+    <label class="field"><input type="radio" name="mode" value="create" checked> はじめて(新しく始める)</label>
+    ${hasCurrent ? `<label class="field"><input type="radio" name="mode" value="link"> いまログイン中のアカウント「${esc(state.account.name)}」を引き継ぐ</label>` : ''}
+    <label class="field"><input type="radio" name="mode" value="claim"> 以前のアカウントを引き継ぐ(ユーザー名とパスワード)</label>
+    <div data-claim-fields hidden>
+      <label class="field"><span>ユーザー名 または メールアドレス</span><input name="name" maxlength="120" autocomplete="off"></label>
+      <label class="field"><span>パスワード</span><input name="password" type="password" autocomplete="off"></label>
+    </div>
+    <input name="website" class="hp" tabindex="-1" aria-hidden="true">`,
   async f => {
-    if (signup && f.password.value !== f.password2.value) throw new Error('パスワードが一致しません。');
-    const res = await api(`/account/${signup ? 'signup' : 'login'}`, {
-      method: 'POST', body: JSON.stringify({ name: f.name.value, password: f.password.value, email: f.email?.value || '', website: f.website.value }),
-    });
-    store.set(SESSION_KEY, res.token);
-    setUser(res.account.name);
-    await Promise.all([refreshSettings(), loadData()]);
-    const c = res.claimed;
-    toast(`👤 ${res.account.name} で${signup ? 'アカウントを作りました' : 'ログインしました'}${c?.edits ? `（ゲストの編集${c.edits}件を引き継ぎ）` : ''}`);
-    if (!state.dirty) route();
-  }, { submitLabel: signup ? '作成する' : 'ログイン' });
-  form.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => openAuth(b.dataset.mode)));
+    const mode = f.mode.value;
+    const res = await kaApi({ action: mode, name: f.name?.value || '', password: f.password?.value || '' });
+    await finishLogin(res, mode === 'create' ? 'で始めました' : 'を引き継ぎました');
+  }, { submitLabel: '決定' });
+  const toggle = () => { form.querySelector('[data-claim-fields]').hidden = form.mode.value !== 'claim'; };
+  form.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', toggle));
+}
+// ほかのゲームでかるわかGAMESにログイン済みなら、紐づけ済みの場合だけ自動でログインする
+async function autoKaLogin() {
+  try {
+    if (!window.KaAccount || state.account) return;
+    await window.KaAccount.ready;
+    if (!window.KaAccount.isLoggedIn()) return;
+    const r = await kaApi({ action: 'status' });
+    if (r.token) await finishLogin(r, 'でログインしました');
+  } catch { /* 通信できなくても閲覧は続行 */ }
 }
 
 async function logout() {
   store.set(SESSION_KEY, '');
+  try { await window.KaAccount?.logout(); } catch { /* ignore */ }
   await refreshSettings();
   toast('ログアウトしました');
   navigate('/');
@@ -277,7 +306,7 @@ async function renderUser(name) {
           </form>` : ''}
         </div>
       </div>
-      ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button><button class="btn" data-logout>ログアウト</button></div>`
+      ${me ? `<div class="btns profile-actions"><button class="btn" data-bio-edit>✏️ 自己紹介を編集</button><button class="btn" data-claim>ゲストの編集を引き継ぐ</button>${state.account && !state.account.ka ? '<button class="btn" data-ka-link>🔑 かるわかGAMESアカウントに引き継ぐ</button>' : ''}<button class="btn" data-logout>ログアウト</button></div>`
         : `<div class="btns profile-actions"><button class="btn follow-btn${p.isFollowing ? '' : ' primary'}" data-follow>${p.isFollowing ? '✓ フォロー中' : '＋ フォローする'}</button></div>`}
     </section>
     ${me ? `
@@ -420,6 +449,7 @@ async function renderUser(name) {
     });
   }
   app.querySelector('[data-logout]')?.addEventListener('click', logout);
+  app.querySelector('[data-ka-link]')?.addEventListener('click', openAuth);
   app.querySelector('[data-claim]')?.addEventListener('click', async () => {
     try {
       const { claimed } = await api('/account/claim', { method: 'POST' });
@@ -2052,4 +2082,5 @@ function showOpenchatBar() {
     return;
   }
   route();
+  autoKaLogin(); // ほかのゲームでかるわかGAMESにログイン済みなら、自動でログイン
 })();
