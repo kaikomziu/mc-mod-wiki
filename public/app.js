@@ -15,6 +15,7 @@ const state = {
 };
 const USER_KEY = 'modwiki-user';
 const TOKEN_KEY = 'modwiki-admin';
+const KA_ADMIN_KEY = 'modwiki-admin-via-ka'; // 管理者ログインが「かるわかGAMESアカウント」によるものか
 const SESSION_KEY = 'modwiki-session'; // アカウントのログイン
 const GUEST_KEY = 'modwiki-guest'; // ゲストとして作ったものを後で自分のものにするための、このブラウザのID
 const store = {
@@ -256,6 +257,31 @@ async function autoKaLogin() {
     if (!window.KaAccount.isLoggedIn()) return;
     const r = await kaApi({ action: 'status' });
     if (r.token) await finishLogin(r, 'でログインしました');
+  } catch { /* 通信できなくても閲覧は続行 */ }
+}
+
+// かるわかGAMESアカウントが管理者なら、パスワード(NE/CL/CH)なしで管理者としてログインする。
+// そのアカウントからログアウトしたら、このログインも外す
+async function kaAdminSync() {
+  try {
+    const KA = window.KaAccount;
+    if (!KA) return;
+    await KA.ready;
+    const p = KA.user();
+    if (p && p.is_admin) {
+      if (state.admin) return;
+      const { token } = await api('/admin/ka-login', { method: 'POST', body: JSON.stringify({ kaToken: KA.token() }) });
+      store.set(TOKEN_KEY, token);
+      store.set(KA_ADMIN_KEY, '1');
+      await refreshSettings();
+      toast('👑 管理者としてログインしました');
+      if (!state.dirty) route();
+    } else if (store.get(KA_ADMIN_KEY)) {
+      store.set(KA_ADMIN_KEY, '');
+      store.set(TOKEN_KEY, '');
+      await refreshSettings();
+      if (!state.dirty) route();
+    }
   } catch { /* 通信できなくても閲覧は続行 */ }
 }
 
@@ -2083,4 +2109,6 @@ function showOpenchatBar() {
   }
   route();
   autoKaLogin(); // ほかのゲームでかるわかGAMESにログイン済みなら、自動でログイン
+  kaAdminSync(); // かるわかGAMESアカウントが管理者なら、管理者としてもログイン
+  window.KaAccount?.onChange(() => kaAdminSync());
 })();
